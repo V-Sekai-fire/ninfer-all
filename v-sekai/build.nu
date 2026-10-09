@@ -46,7 +46,7 @@ def stage-windows [bin: path, prefix: path] {
         $queue = ($queue | skip 1)
         let deps = (^dumpbin /nologo /dependents $file | lines | str trim | where {|l| $l =~ '(?i)\.dll$' })
         for dll in $deps {
-            let key = ($dll | str downcase)
+            let key = ($dll | str lowercase)
             if $key in $seen { continue }
             $seen = ($seen | append $key)
             let source = ($library_bin | path join $dll)
