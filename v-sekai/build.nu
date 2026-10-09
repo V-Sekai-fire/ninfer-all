@@ -31,6 +31,9 @@ def --env configure-windows [root: path, prefix: path] {
 }
 
 def --env configure-linux [prefix: path] {
+    # WSL appends the Windows PATH as /mnt/<drive> entries. CMake's package search would walk
+    # them over the 9p bridge, which takes many minutes per lookup, so drop them.
+    $env.PATH = ($env.PATH | where {|d| not ($d | str starts-with /mnt/) })
     $env.CUDACXX = ($prefix | path join bin nvcc)
     $env.PKG_CONFIG_PATH = ($prefix | path join lib pkgconfig)
     [$"-DCUDAToolkit_ROOT=($prefix)" $"-DCMAKE_CUDA_HOST_COMPILER=($env.CXX)" $"-DCMAKE_PREFIX_PATH=($prefix)"]
