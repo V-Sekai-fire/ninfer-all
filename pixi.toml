@@ -17,6 +17,7 @@ cuda-cudart-static = "13.*"
 libcublas-dev = "13.*"
 cuda-cccl = "13.*"
 cuda-nvrtc-dev = "13.*"
+cuda-nvtx-dev = "13.*"
 cuda-version = "13.*"
 ffmpeg = { version = "7.*", build = "lgpl*" }
 libcurl = ">=8"
