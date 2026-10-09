@@ -2,7 +2,7 @@
 # Run on Windows from the fork root, after build.nu on both platforms and convert.nu:
 #   pixi run -e build nu v-sekai/release.nu --tag v0.12.0-dev.1
 # dist/windows comes from build.nu on this host. dist/linux and dist/tools-linux come from
-# build.nu on Linux (the v-sekai-linux workflow uploads them as one artifact).
+# build.nu on Linux, for example in WSL2 on the same host, copied into this checkout's dist/.
 #
 # The release copies the desync pattern of V-Sekai-fire/service-language-model release.ps1:
 # a desync chunk store whose zstd chunks are packed, unchanged, into payload-data-NNN.bin
@@ -143,7 +143,8 @@ def main [
     let setup = (run-external ($assets | path join setup.exe) '--from' $assets '--target' $restore_windows '--quiet' | complete)
     if $setup.exit_code != 0 { error make {msg: $"Offline restore through setup.exe failed (exit ($setup.exit_code))."} }
     # Linux: ninfer-install runs the same volume unpack and desync untar; replay it here with
-    # desync.exe against payload-linux.caidx. The online Linux install is checked in CI.
+    # desync.exe against payload-linux.caidx. The V-Sekai Linux install check workflow runs
+    # ninfer-install online against the published release.
     let restore_linux = ($release_dir | path join restore-linux)
     ^$desync untar --index --store $store ($assets | path join payload-linux.caidx) $restore_linux
     check "Restoring the Linux payload"

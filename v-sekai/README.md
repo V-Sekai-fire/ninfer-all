@@ -22,13 +22,16 @@ with the C++ tools.
 1. `pixi run nu v-sekai/fetch-sources.nu` downloads the conversion sources into `sources/`.
 2. `pixi run nu v-sekai/convert.nu` writes `models/bonsai2-27b-heretic.ninfer`.
 3. `pixi run -e build nu v-sekai/build.nu` builds `ninfer-serve` and `ninfer-calibrate` and
-   stages them with their library closure in `dist/<os>/`. Run it on Windows. The
-   `V-Sekai Linux` workflow runs it on Linux and uploads `dist/linux` and `dist/tools-linux`.
+   stages them with their library closure in `dist/<os>/`. Run it once on Windows and once
+   on Linux. WSL2 on the RTX 4090 host is enough: it passes the Windows NVIDIA driver through,
+   so the same host builds and GPU-tests both platforms. Copy the Linux `dist/linux` and
+   `dist/tools-linux` into the Windows checkout's `dist/`.
 4. `pixi run -e build nu v-sekai/release.nu --tag v0.12.0-dev.N`, on Windows with both
    `dist` trees present, stages both payloads, restores each one, compares every file by
    SHA-256, and publishes a prerelease.
-5. Run the `V-Sekai Linux` workflow with `check_tag` set to the tag. It installs the release
-   online with `ninfer-install` and checks every file against `payload-linux.sha256`.
+5. Run the `V-Sekai Linux install check` workflow with the tag. It installs the release
+   online with `ninfer-install` on a clean runner and checks every file against
+   `payload-linux.sha256`. It needs no GPU.
 
 ## Artifact sources
 
