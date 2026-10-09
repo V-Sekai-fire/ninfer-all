@@ -1,5 +1,5 @@
 # Convert Ternary Bonsai 2 27B Uncensored Heretic v2 into one ninfer-all v3 artifact.
-# Run from the fork root after fetch-sources.nu: pixi run nu v-sekai/convert.nu
+# Run from the fork root after fetch-sources.nu: pixi run --locked nu v-sekai/convert.nu
 # Recipe bonsai2_27b_ternary, as WaveCut/Ternary-Bonsai-2-27B-NInfer-v3 documents it.
 # The body keeps PrismML's t2_g128_fp16 ternary codes without rounding. Vision and the
 # frontend resources come from Qwen3.8-27B. MTP and DFlash2 are ProCreations' Bonsai 2 heads.

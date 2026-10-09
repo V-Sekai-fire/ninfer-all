@@ -1,6 +1,6 @@
 # Build and publish a dev.* Windows and Linux release of ninfer-all with Bonsai 2 Heretic v2.
 # Run on Windows from the fork root, after build.nu on both platforms and convert.nu:
-#   pixi run -e build nu v-sekai/release.nu --tag v0.12.0-dev.1
+#   pixi run --locked -e build nu v-sekai/release.nu --tag v0.12.0-dev.1
 # dist/windows comes from build.nu on this host. dist/linux and dist/tools-linux come from
 # build.nu on Linux, for example in WSL2 on the same host, copied into this checkout's dist/.
 #
