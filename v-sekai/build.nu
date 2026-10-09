@@ -7,7 +7,7 @@
 # Linux: GCC 14 and a glibc 2.28 sysroot come from pixi. pkg-config finds FFmpeg and libcurl.
 # Each staged binary loads its libraries from ../lib through an $ORIGIN rpath.
 
-use msvc.nu vcvars-env
+use msvc.nu load-msvc
 
 const programs = [ninfer-serve ninfer-calibrate]
 
@@ -22,11 +22,7 @@ def --env configure-windows [root: path, prefix: path] {
     if not ($link | path exists) {
         ^cmd /c mklink /J ($link | str replace -a '/' '\') ($library | str replace -a '/' '\')
     }
-    # vcvars sets PATH and VCPKG_ROOT; keep the pixi PATH entries first and re-assert ours.
-    let vc = (vcvars-env)
-    let pixi_path = $env.Path
-    load-env ($vc | reject -i Path PATH VCPKG_ROOT)
-    $env.Path = ($pixi_path | append ($vc.Path | split row ';'))
+    load-msvc
     $env.VCPKG_ROOT = ($root | path join .deps)
     $env.VCPKG_TARGET_TRIPLET = "x64-windows"
     $env.CUDA_PATH = $library
