@@ -1,5 +1,5 @@
 # Download every conversion source for the Bonsai 2 Heretic v2 artifact.
-# Run from the fork root: pixi run nu v-sekai/fetch-sources.nu
+# Run from the fork root: pixi run --locked nu v-sekai/fetch-sources.nu
 # The Qwen3.8-27B checkpoint gives config, tokenizer, frontend resources and
 # the vision tower. Every vision tensor is in shard 1, so only that shard is fetched.
 
