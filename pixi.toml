@@ -35,6 +35,7 @@ numpy = "*"
 safetensors = "*"
 pytorch-cpu = "*"
 huggingface_hub = ">=0.28"
+gguf = ">=0.19"
 
 [environments]
 default = { features = ["convert"], solve-group = "default" }

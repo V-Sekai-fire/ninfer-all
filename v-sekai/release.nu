@@ -11,7 +11,7 @@
 # desync.exe; payload-linux.caidx indexes the Linux payload for ninfer-install and desync.
 # Both payloads are restored and compared file by file by SHA-256 before anything is published.
 
-use msvc.nu vcvars-env
+use msvc.nu load-msvc
 
 const volume_limit = 1900000000
 const desync_repo = "https://github.com/V-Sekai-fire/multiplayer-fabric-desync.git"
@@ -81,10 +81,7 @@ def main [
     let installer_build = ($release_dir | path join installer-build)
     for d in [$store $assets $tools] { mkdir $d }
 
-    let vc = (vcvars-env)
-    let pixi_path = $env.Path
-    load-env ($vc | reject -i Path PATH VCPKG_ROOT)
-    $env.Path = ($pixi_path | append ($vc.Path | split row ';'))
+    load-msvc
 
     # setup.exe with the tag pinned into it, and the volume packer.
     ^cmake -S v-sekai/installer -B $installer_build -G Ninja -DCMAKE_BUILD_TYPE=Release $"-DNI_RELEASE_TAG=($tag)"
