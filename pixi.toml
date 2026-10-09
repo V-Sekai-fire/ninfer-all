@@ -1,0 +1,41 @@
+[workspace]
+name = "ninfer-all-v-sekai"
+description = "Windows and Linux sm_89 builds and dev.* desync releases of ninfer-all for Ternary Bonsai 2 27B Heretic"
+channels = ["conda-forge"]
+platforms = ["win-64", "linux-64"]
+
+[dependencies]
+nushell = ">=0.116"
+cmake = ">=3.28"
+ninja = "*"
+git = "*"
+go = ">=1.25"
+zstd = ">=1.5.7,<2"
+cuda-nvcc = "13.*"
+cuda-cudart-dev = "13.*"
+cuda-cudart-static = "13.*"
+libcublas-dev = "13.*"
+cuda-cccl = "13.*"
+cuda-nvrtc-dev = "13.*"
+cuda-version = "13.*"
+ffmpeg = { version = "7.*", build = "lgpl*" }
+libcurl = ">=8"
+pkg-config = "*"
+python = "3.12.*"
+jinja2 = "*"
+
+[target.linux-64.dependencies]
+gxx_linux-64 = "14.*"
+sysroot_linux-64 = "2.28.*"
+patchelf = "*"
+cuda-driver-dev = "13.*"
+
+[feature.convert.dependencies]
+numpy = "*"
+safetensors = "*"
+pytorch-cpu = "*"
+huggingface_hub = ">=0.28"
+
+[environments]
+default = { features = ["convert"], solve-group = "default" }
+build = { features = [], solve-group = "default" }
