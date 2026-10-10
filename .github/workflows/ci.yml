@@ -36,6 +36,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  packages: write
+  statuses: write
+
 jobs:
   calculator:
     name: Config calculator arithmetic
