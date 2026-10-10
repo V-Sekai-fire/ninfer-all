@@ -47,7 +47,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Draft PRs allocate no runners. Ready-for-review starts CI; converting back cancels the old run.
+permissions:
+  contents: read
+  packages: write
+  statuses: write
+
 jobs:
   build-inputs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
