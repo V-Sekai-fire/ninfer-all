@@ -1,6 +1,6 @@
 # Continuous integration, all of it without a GPU: GitHub-hosted runners have none, so the CUDA
 # builds compile every target and run the test suite with each GPU test skipping itself (exit 77).
-# A green run of this workflow on master is what publishes the container image (docker.yml).
+# A green run of this workflow on main is what publishes the container image (docker.yml).
 #
 #   * docs/config-calculator.test.mjs -- pins the published calculator's arithmetic against the
 #     engine's own figures.
@@ -27,8 +27,8 @@ name: CI
 on:
   pull_request:
   push:
-    # ci/** runs the whole workflow on a branch without a pull request; only master publishes.
-    branches: [master, 'ci/**']
+    # ci/** runs the whole workflow on a branch without a pull request; only main publishes.
+    branches: [main, 'ci/**']
 
 # A newer push to a branch or pull request cancels the run still going for the older one; a merged
 # or closed pull request's runs are cancelled by cancel-superseded.yml.
