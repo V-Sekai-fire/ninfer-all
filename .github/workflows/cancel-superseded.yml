@@ -1,5 +1,5 @@
 # Cancels a pull request's runs that are still queued or in progress once it is merged or closed.
-# Its CI runs sit in their own concurrency group (refs/pull/N/merge), so master's run of the merge
+# Its CI runs sit in their own concurrency group (refs/pull/N/merge), so main's run of the merge
 # does not cancel them, and they would otherwise build on to the end for nothing.
 #
 # pull_request_target runs in this repository with a token that can cancel runs, also for a pull
