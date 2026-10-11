@@ -54,6 +54,7 @@ platforms = ["osx-arm64-macos14"]
 numpy = "*"
 mlx = ">=0.32"
 mlx-lm = ">=0.32"
+mlx-vlm = ">=0.6.17"
 
 [environments]
 default = { features = ["convert"], solve-group = "default" }

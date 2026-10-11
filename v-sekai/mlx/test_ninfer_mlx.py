@@ -19,6 +19,23 @@ def oracle(text, object_id, rows):
     record = text.artifact.object(object_id)
     n, k = record.shape
     data = text.artifact.read_object(object_id)
+    if record.format in ("q4_g64_fp16", "q5_g64_fp16", "q6_g64_fp16"):
+        b, high = {"q4_g64_fp16": (4, 0), "q5_g64_fp16": (5, 1), "q6_g64_fp16": (6, 2)}[record.format]
+        kp = (k + 127) // 128 * 128
+        base_total = n * kp // 2
+        base = np.frombuffer(data, np.uint8, count=base_total).reshape(n, kp // 2)
+        u = np.stack([base & 15, base >> 4], -1).reshape(n, kp).astype(np.int64)
+        at = (base_total + 255) // 256 * 256
+        if high:
+            hb = np.frombuffer(data, np.uint8, count=n * kp * high // 8, offset=at).reshape(n, -1)
+            bitsarr = np.unpackbits(hb, axis=1, bitorder="little").reshape(n, kp, high)
+            for j in range(high):
+                u |= bitsarr[..., j].astype(np.int64) << (4 + j)
+            at = (at + n * kp * high // 8 + 255) // 256 * 256
+        q = np.where(u >= 1 << (b - 1), u - (1 << b), u).astype(np.float64)
+        scales = np.frombuffer(data, np.float16, count=n * kp // 64, offset=at).reshape(n, kp // 64)
+        full = q * np.repeat(scales.astype(np.float64), 64, axis=1)
+        return full[rows[0]:rows[1], :k]
     if record.format == "q8_g32_fp16":
         codes = np.frombuffer(data, np.int8, count=n * k).reshape(n, k)[rows[0]:rows[1]].astype(np.float64)
         offset = (n * k + 255) // 256 * 256
@@ -53,7 +70,7 @@ def check(text, name, rows_limit=512):
         expected.append(oracle(text, part["object"], (begin // k, end // k)))
     expected = np.concatenate(expected)
     take = slice(0, min(rows_limit, expected.shape[0]))
-    got = mlx_decode(words[take], scales[take], biases[take], bits, group)
+    got = mlx_decode(words[take], scales[take], biases[take], bits, group)[:, :expected.shape[1]]
     return np.array_equal(got.astype(np.float64), expected[take]), expected[take]
 
 
@@ -70,6 +87,11 @@ def main(path):
         "mtp/layers/0/attention/gate",  # q8, third part of a shared object
         "mtp/layers/0/mlp/down",
         "proposal/head",
+        "vision/patch_embedding",              # q6_g64
+        "vision/layers/0/attention/key",       # q4, part of a fused parent
+        "vision/layers/0/attention/output",    # q5
+        "vision/layers/26/mlp/fc2",            # q5, K=4304 padded to 4480
+        "vision/merger/fc1",                   # q8
     ]
     failures = 0
     for name in names:
