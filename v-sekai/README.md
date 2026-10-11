@@ -19,6 +19,11 @@ Pixi supplies CUDA 13, CMake, Ninja, FFmpeg (LGPL build), libcurl, Go, Python an
 and on Linux GCC 14 with a glibc 2.28 sysroot. The Windows host needs Visual Studio 2022
 with the C++ tools.
 
+Steps 1 and 2 use the default environment, which runs on Windows, Linux and macOS (Apple
+silicon). The converter is pure Python on the CPU, so any of them can make the artifact.
+Steps 3 and 4 use the `build` environment, which exists only on Windows and Linux, because the
+engine needs CUDA.
+
 1. `pixi run --locked nu v-sekai/fetch-sources.nu` downloads the conversion sources into `sources/`.
 2. `pixi run --locked nu v-sekai/convert.nu` writes `models/bonsai2-27b-heretic.ninfer`.
 3. `pixi run --locked -e build nu v-sekai/build.nu` builds `ninfer-serve` and `ninfer-calibrate` and
