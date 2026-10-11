@@ -34,6 +34,27 @@ for _byte in range(256):
     _LUT[_byte] = sum(int(_T2_TO_MLX[(_byte >> (2 * lane)) & 3]) << (2 * lane) for lane in range(4))
 
 
+# format -> (bits, group, high-plane bits per lane)
+_ROW_SPLIT = {
+    "t2_g128_fp16": (2, 128, 0),
+    "q4_g64_fp16": (4, 64, 0),
+    "q5_g64_fp16": (5, 64, 1),
+    "q6_g64_fp16": (6, 64, 2),
+    "q8_g32_fp16": (8, 32, 0),
+}
+
+
+def _pack_bitstream(u: mx.array, bits: int) -> mx.array:
+    """Pack [N, K] b-bit words LSB-first into MLX's uint32 layout (8 lanes per b bytes)."""
+    n, k = u.shape
+    lanes = u.astype(mx.uint64).reshape(n, k // 8, 8)
+    packed = mx.zeros((n, k // 8), mx.uint64)
+    for i in range(8):
+        packed = packed | (lanes[..., i] << (bits * i))
+    as_bytes = mx.stack([(packed >> (8 * j)) & 0xFF for j in range(bits)], axis=-1).astype(mx.uint8)
+    return as_bytes.reshape(n, k * bits // 8).view(mx.uint32)
+
+
 def _align(value: int, alignment: int) -> int:
     return (value + alignment - 1) // alignment * alignment
 
@@ -89,45 +110,67 @@ class NinferText:
     def _record(self, object_id: str):
         return self.artifact.object(object_id)
 
-    def dense(self, name: str) -> mx.array:
-        binding = self.bindings[name]
-        record = self._record(binding["object"])
-        data = self._raw(binding["object"])
+    def _dense_object(self, object_id: str) -> mx.array:
+        record = self._record(object_id)
+        data = self._raw(object_id)
         if record.format == "bf16":
             return mx.array(np.frombuffer(data, np.uint16).reshape(record.shape)).view(mx.bfloat16)
         if record.format == "fp32":
             return mx.array(np.frombuffer(data, np.float32).reshape(record.shape))
-        raise ValueError(f"{name}: {record.format} is not a dense format")
+        raise ValueError(f"{object_id}: {record.format} is not a dense format")
+
+    def dense(self, name: str) -> mx.array:
+        """A bf16/fp32 binding; a parts binding joins its element ranges into one flat array."""
+        binding = self.bindings[name]
+        if "object" in binding:
+            return self._dense_object(binding["object"])
+        pieces = [self._dense_object(p["object"]).reshape(-1)[p["range"][0]:p["range"][1]]
+                  for p in binding["parts"]]
+        return mx.concatenate(pieces)
 
     def _rows(self, object_id: str, row_begin: int, row_end: int):
         """Rows [row_begin, row_end) of a row-split object as MLX affine (words, scales, biases, bits, group).
 
-        t2_g128: code t in {-1,0,1} -> u = t + 1, bias -s. q8_g32: code q in [-127,127] -> u = q + 128,
-        bias -128 s. Both decode to code * scale exactly; the remap runs on the GPU.
+        Codes are signed two's complement; MLX stores u = q + 2^(b-1) (q XOR 2^(b-1) in b bits) with
+        bias -2^(b-1) s, except t2, whose {-1,0,1} becomes u = q + 1 with bias -s. Each decodes to
+        q * s exactly. K is the layout's padded width (a multiple of 128); padding decodes to zero.
+        The bit work runs on the GPU.
         """
         record = self._record(object_id)
         if record.layout != "row_split_k128_v1":
             raise ValueError(f"{object_id}: layout {record.layout} is not row-split")
+        fmt = record.format
+        if fmt not in _ROW_SPLIT:
+            raise ValueError(f"{object_id}: {fmt} has no MLX repack")
+        bits, group, high_bits = _ROW_SPLIT[fmt]
         rows, columns = record.shape
-        if columns % 128:
-            raise ValueError(f"{object_id}: K={columns} is not a multiple of 128")
-        if record.format == "t2_g128_fp16":
-            bits, group, code_bytes = 2, GROUP, rows * columns // 4
-        elif record.format == "q8_g32_fp16":
-            bits, group, code_bytes = 8, 32, rows * columns
-        else:
-            raise ValueError(f"{object_id}: {record.format} has no MLX repack yet")
-        groups = columns // group
+        kp = _align(columns, 128)
+        base_bits = {2: 2, 8: 8}.get(bits, 4)
+        base_total = rows * kp * base_bits // 8
+        high_total = rows * kp * high_bits // 8
+        high_at = _align(base_total, 256)
+        scales_at = _align(high_at + high_total, 256) if high_bits else high_at
         data = self._raw(object_id)
-        codes = np.frombuffer(data, np.uint8, count=code_bytes).reshape(rows, -1)[row_begin:row_end]
+        groups = kp // group
         scales = mx.array(np.frombuffer(data, np.float16, count=rows * groups,
-                                        offset=_align(code_bytes, 256)).reshape(rows, groups)[row_begin:row_end])
+                                        offset=scales_at).reshape(rows, groups)[row_begin:row_end])
+        base = mx.array(np.frombuffer(data, np.uint8, count=base_total).reshape(rows, -1)[row_begin:row_end])
         if bits == 2:
-            # mx.take gathers each code byte's MLX word.
-            words = mx.take(mx.array(_LUT), mx.array(codes)).view(mx.uint32)
+            words = mx.take(mx.array(_LUT), base).view(mx.uint32)
             return words, scales, -scales, bits, group
-        words = (mx.array(codes) ^ 0x80).view(mx.uint32)  # two's complement q + 128 == q XOR 0x80
-        return words, scales, scales * -128.0, bits, group
+        if bits == 8:
+            words = (base ^ 0x80).view(mx.uint32)
+            return words, scales, scales * -128.0, bits, group
+        n = row_end - row_begin
+        lanes = mx.stack([base & 0x0F, base >> 4], axis=-1).reshape(n, kp).astype(mx.uint32)
+        if high_bits:
+            high = mx.array(np.frombuffer(data, np.uint8, count=high_total, offset=high_at)
+                            .reshape(rows, -1)[row_begin:row_end])
+            stream = mx.stack([(high >> i) & 1 for i in range(8)], axis=-1).reshape(n, kp, high_bits)
+            for j in range(high_bits):
+                lanes = lanes | (stream[..., j].astype(mx.uint32) << (4 + j))
+        u = lanes ^ (1 << (bits - 1))
+        return _pack_bitstream(u, bits), scales, scales * -float(1 << (bits - 1)), bits, group
 
     def rowsplit(self, name: str):
         """One logical binding as (words, scales, biases, bits, group), joining its parts by rows."""

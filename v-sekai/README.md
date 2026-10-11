@@ -62,21 +62,41 @@ stored values without rounding. It then runs them in mlx-lm's Qwen3.5 model. The
 each Use's `hadamard_signs` rotation before the product and restores the token table to the
 primal basis, as [docs/maintainer/qwen3_5-model.md](../docs/maintainer/qwen3_5-model.md#hadamard-rotated-checkpoints)
 describes. It also keeps the bf16 activation boundaries of the CUDA engine's embedding gather
-and linears. Vision, MTP and DFlash2 are not loaded on this path.
+and linears.
+
+`v-sekai/mlx/vlm.py` loads every component into mlx-vlm. The vision tower's q4/q5/q6/q8
+row-split matrices are repacked to MLX affine words of the same width, also without rounding.
+The MTP and DFlash2 heads become mlx-vlm's `qwen3_5_mtp` and `dflash2` drafters. Drafting is
+greedy and opt-in. On an M2 Pro both drafters give the same text as plain decoding, but they
+decode slower than it, because MLX's batched 2-bit matmul costs more per verify pass than the
+accepted tokens save. `ninfer_mlx.py generate --mtp N` runs the earlier standalone MTP decoder
+in `speculative.py`.
 
 1. `pixi run --locked nu v-sekai/macos-convert-job.nu install` fetches the sources and converts
    them as a launchd oneshot. The log is `~/Library/Logs/ninfer-convert.log`.
 2. `pixi run --locked -e mlx python v-sekai/mlx/ninfer_mlx.py generate --model models/bonsai2-27b-heretic.ninfer --prompt "..."`
    runs one prompt.
-3. `pixi run --locked nu v-sekai/macos-serve-job.nu install` runs `mlx_lm.server` on the
-   artifact as a launchd service at `http://127.0.0.1:8090/v1`, one decode at a time.
-   `uninstall` removes it.
+3. `pixi run --locked nu v-sekai/macos-serve-job.nu install` runs mlx-vlm's OpenAI server on
+   the artifact as a launchd service at `http://127.0.0.1:8090/v1`, one sequence at a time. It
+   accepts text and image messages. `--draft ninfer:mtp` or `--draft ninfer:dflash2` turns on
+   a drafter. `uninstall` removes the service.
 
-Two checks cover the loader:
+These checks cover the loader:
 
-- `v-sekai/mlx/test_ninfer_mlx.py <artifact>` decodes six tensors straight from the layout
-  specification and requires the MLX repack to dequantise to the same values. A reversed lane
-  map and a wrong row range must both fail.
+- `v-sekai/mlx/test_ninfer_mlx.py <artifact>` decodes 15 tensors (t2, q4, q5, q6 and q8, from
+  text, MTP, proposal and vision) straight from the layout specification. The MLX repack must
+  dequantise each one to the same values. A reversed lane map and a wrong row range must both
+  fail.
+- `v-sekai/mlx/test_vision.py <artifact> <Qwen3.8-27B dir>` compares all 111 vision matrices
+  with the bf16 source by cosine, with a bar of 0.95. q4 rounding alone reaches 0.987. Rows
+  rolled by one head must fail. It also asks about a generated image with a red circle, a blue
+  square and the text "42", and requires the answer to name each shape, colour, side and the
+  text.
+- `v-sekai/mlx/test_drafters.py <artifact> [tokens] [mtp|dflash]` compares drafted greedy text
+  with plain greedy text and reports acceptance. A DFlash2 feature projection with its per-layer
+  blocks rotated must lose most of its acceptance.
+- `v-sekai/mlx/test_mtp.py <artifact>` does the same for `speculative.py`. It accepts a first
+  difference only where the plain run's top two logits were within one bf16 step.
 - `v-sekai/mlx/parity_reference.py <artifact> <dir>` compares every text tensor the loader
   builds with an independent MLX conversion of the same PQ2_0 GGUF
   ([3hs4n/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-mlx-2bit](https://huggingface.co/3hs4n/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-mlx-2bit)).
