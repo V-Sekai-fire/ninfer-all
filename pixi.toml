@@ -2,7 +2,7 @@
 name = "ninfer-all-v-sekai"
 description = "Windows and Linux sm_89 builds and dev.* desync releases of ninfer-all for Ternary Bonsai 2 27B Heretic; the converter also runs on macOS"
 channels = ["conda-forge"]
-platforms = ["win-64", "linux-64", "osx-arm64"]
+platforms = ["win-64", "linux-64", { name = "osx-arm64-macos14", platform = "osx-arm64", macos = "14.5" }]
 
 [dependencies]
 nushell = ">=0.116"
@@ -46,6 +46,16 @@ pytorch-cpu = "*"
 huggingface_hub = ">=0.28"
 gguf = ">=0.19"
 
+# Apple silicon serves .ninfer artifacts through MLX's Metal kernels.
+[feature.mlx]
+platforms = ["osx-arm64-macos14"]
+
+[feature.mlx.dependencies]
+numpy = "*"
+mlx = ">=0.32"
+mlx-lm = ">=0.32"
+
 [environments]
 default = { features = ["convert"], solve-group = "default" }
 build = { features = ["build"], solve-group = "default" }
+mlx = { features = ["mlx"] }

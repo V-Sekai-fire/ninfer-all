@@ -52,3 +52,36 @@ After installation, run `nu serve.nu` in the install directory
 (`C:\ProgramData\V-Sekai\NInfer` by default on Windows, the `--target` folder on Linux).
 `nu serve.nu --help` lists the options. A Linux host needs an NVIDIA driver of the CUDA 13
 branch and glibc 2.28 or newer.
+
+## macOS (Apple silicon)
+
+The CUDA engine does not build on macOS. `v-sekai/mlx/ninfer_mlx.py` serves the same `.ninfer`
+artifact through MLX instead. It reads the text component and repacks each `t2_g128_fp16`
+matrix into MLX 2-bit affine words (code `t + 1`, scale `s`, bias `-s`), which decode to the
+stored values without rounding. It then runs them in mlx-lm's Qwen3.5 model. The loader applies
+each Use's `hadamard_signs` rotation before the product and restores the token table to the
+primal basis, as [docs/maintainer/qwen3_5-model.md](../docs/maintainer/qwen3_5-model.md#hadamard-rotated-checkpoints)
+describes. It also keeps the bf16 activation boundaries of the CUDA engine's embedding gather
+and linears. Vision, MTP and DFlash2 are not loaded on this path.
+
+1. `pixi run --locked nu v-sekai/macos-convert-job.nu install` fetches the sources and converts
+   them as a launchd oneshot. The log is `~/Library/Logs/ninfer-convert.log`.
+2. `pixi run --locked -e mlx python v-sekai/mlx/ninfer_mlx.py generate --model models/bonsai2-27b-heretic.ninfer --prompt "..."`
+   runs one prompt.
+3. `pixi run --locked nu v-sekai/macos-serve-job.nu install` runs `mlx_lm.server` on the
+   artifact as a launchd service at `http://127.0.0.1:8090/v1`, one decode at a time.
+   `uninstall` removes it.
+
+Two checks cover the loader:
+
+- `v-sekai/mlx/test_ninfer_mlx.py <artifact>` decodes six tensors straight from the layout
+  specification and requires the MLX repack to dequantise to the same values. A reversed lane
+  map and a wrong row range must both fail.
+- `v-sekai/mlx/parity_reference.py <artifact> <dir>` compares every text tensor the loader
+  builds with an independent MLX conversion of the same PQ2_0 GGUF
+  ([3hs4n/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-mlx-2bit](https://huggingface.co/3hs4n/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-mlx-2bit)).
+  Ternary matrices are compared after dequantisation and sign vectors bit for bit. Dense
+  tensors must match exactly, except that `A_log` may differ by one fp32 ulp, because both
+  converters recover it as `log(-ssm_a)`.
+
+Neither check compares logits with the CUDA engine. That comparison needs an NVIDIA host.
