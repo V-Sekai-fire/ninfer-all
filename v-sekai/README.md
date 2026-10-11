@@ -69,8 +69,7 @@ row-split matrices are repacked to MLX affine words of the same width, also with
 The MTP and DFlash2 heads become mlx-vlm's `qwen3_5_mtp` and `dflash2` drafters. Drafting is
 greedy and opt-in. On an M2 Pro both drafters give the same text as plain decoding, but they
 decode slower than it, because MLX's batched 2-bit matmul costs more per verify pass than the
-accepted tokens save. `ninfer_mlx.py generate --mtp N` runs the earlier standalone MTP decoder
-in `speculative.py`.
+accepted tokens save.
 
 1. `pixi run --locked nu v-sekai/macos-convert-job.nu install` fetches the sources and converts
    them as a launchd oneshot. The log is `~/Library/Logs/ninfer-convert.log`.
@@ -95,13 +94,5 @@ These checks cover the loader:
 - `v-sekai/mlx/test_drafters.py <artifact> [tokens] [mtp|dflash]` compares drafted greedy text
   with plain greedy text and reports acceptance. A DFlash2 feature projection with its per-layer
   blocks rotated must lose most of its acceptance.
-- `v-sekai/mlx/test_mtp.py <artifact>` does the same for `speculative.py`. It accepts a first
-  difference only where the plain run's top two logits were within one bf16 step.
-- `v-sekai/mlx/parity_reference.py <artifact> <dir>` compares every text tensor the loader
-  builds with an independent MLX conversion of the same PQ2_0 GGUF
-  ([3hs4n/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-mlx-2bit](https://huggingface.co/3hs4n/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-mlx-2bit)).
-  Ternary matrices are compared after dequantisation and sign vectors bit for bit. Dense
-  tensors must match exactly, except that `A_log` may differ by one fp32 ulp, because both
-  converters recover it as `log(-ssm_a)`.
 
 Neither check compares logits with the CUDA engine. That comparison needs an NVIDIA host.

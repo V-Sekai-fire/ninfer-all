@@ -328,56 +328,6 @@ def text_weights(text: NinferText, config: dict) -> tuple[dict, dict]:
     return w.weights, w.quantized
 
 
-class MTP(nn.Module):
-    """Qwen3.5 MTP: one gated-attention block over [norm(embedding), norm(target hidden)].
-
-    Mirrors ninfer's mtp_forward_stem/tail; the output is final-normalised and is both the draft
-    head's input and the next recursive step's hidden.
-    """
-
-    def __init__(self, args, eps: float) -> None:
-        from mlx_lm.models import qwen3_5
-
-        super().__init__()
-        h = args.hidden_size
-        self.embedding_norm = OffsetRMSNorm(h, eps)
-        self.hidden_norm = OffsetRMSNorm(h, eps)
-        self.final_norm = OffsetRMSNorm(h, eps)
-        self.input_projection = nn.Linear(2 * h, h, bias=False)
-        self.layer = qwen3_5.DecoderLayer(args, layer_idx=FULL_ATTENTION_INTERVAL - 1)
-
-    def __call__(self, embedding: mx.array, hidden: mx.array, cache) -> mx.array:
-        from mlx_lm.models.base import create_attention_mask
-
-        x = mx.concatenate([self.embedding_norm(embedding), self.hidden_norm(hidden)], axis=-1)
-        u = self.input_projection(x)
-        u = self.layer(u, mask=create_attention_mask(u, cache), cache=cache)
-        return self.final_norm(u)
-
-
-class Drafter(nn.Module):
-    """The artifact's MTP head and indexed proposal head (draft logits over a token shortlist)."""
-
-    def __init__(self, args, eps: float, proposal_rows: int) -> None:
-        super().__init__()
-        self.mtp = MTP(args, eps)
-        self.proposal = nn.Linear(args.hidden_size, proposal_rows, bias=False)
-
-
-def drafter_weights(text: NinferText, config: dict) -> tuple[dict, dict]:
-    w = _Weights(text)
-    w.linear("mtp.input_projection", "mtp/input_projection")
-    w.offset_norm("mtp.embedding_norm.weight", "mtp/embedding_norm")
-    w.offset_norm("mtp.hidden_norm.weight", "mtp/hidden_norm")
-    w.offset_norm("mtp.final_norm.weight", "mtp/final_norm")
-    w.offset_norm("mtp.layer.input_layernorm.weight", "mtp/layers/0/input_norm")
-    w.offset_norm("mtp.layer.post_attention_layernorm.weight", "mtp/layers/0/post_attention_norm")
-    w.attention_block("mtp/layers/0/", "mtp.layer.", config)
-    w.ffn_block("mtp/layers/0/", "mtp.layer.")
-    w.linear("proposal", "proposal/head")
-    return w.weights, w.quantized
-
-
 def _materialise(module: nn.Module, weights: dict, quantized: dict) -> None:
     def predicate(path, _module):
         if path not in quantized:
@@ -417,11 +367,8 @@ def _resource_dir(text: NinferText) -> Path:
     return cache
 
 
-def load(path: str | Path, tokenizer_config: dict | None = None, draft: bool = False, **_ignored):
-    """Load a .ninfer text model as an (mlx-lm Model, TokenizerWrapper) pair.
-
-    With draft=True the MTP and proposal heads are attached as model._drafter.
-    """
+def load(path: str | Path, tokenizer_config: dict | None = None, **_ignored):
+    """Load a .ninfer text model as an (mlx-lm Model, TokenizerWrapper) pair."""
     from mlx_lm.models import qwen3_5
     from mlx_lm.tokenizer_utils import load as load_tokenizer
 
@@ -434,13 +381,6 @@ def load(path: str | Path, tokenizer_config: dict | None = None, draft: bool = F
     _install_norms(model, config["rms_norm_eps"])
 
     _materialise(model, *text_weights(text, config))
-    if draft and "mtp" in text.artifact.directory.components:
-        args = model.language_model.args
-        drafter = Drafter(args, config["rms_norm_eps"], text.int32("proposal/token_ids").size)
-        _install_norms(drafter, config["rms_norm_eps"])
-        _materialise(drafter, *drafter_weights(text, config))
-        drafter.__dict__["token_ids"] = text.int32("proposal/token_ids")
-        model.__dict__["_drafter"] = drafter
 
     resources = _resource_dir(text)
     generation = json.loads(text.resource("generation_config.json"))
@@ -464,8 +404,6 @@ def main(argv=None) -> None:
     gen.add_argument("--prompt", required=True)
     gen.add_argument("--max-tokens", type=int, default=128)
     gen.add_argument("--no-chat", action="store_true", help="feed the prompt without the chat template")
-    gen.add_argument("--mtp", type=int, default=0, metavar="N",
-                     help="draft N tokens per round with the artifact's MTP head (greedy only)")
     sub.add_parser("serve", help="OpenAI-compatible server; the remaining flags go to mlx_lm.server")
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["serve"]:
@@ -480,23 +418,12 @@ def main(argv=None) -> None:
     if args.command == "generate":
         from mlx_lm import generate
 
-        model, tokenizer = load(args.model, draft=args.mtp > 0)
+        model, tokenizer = load(args.model)
         prompt = args.prompt
         if not args.no_chat:
             prompt = tokenizer.apply_chat_template(
                 [{"role": "user", "content": prompt}], add_generation_prompt=True, tokenize=False)
-        if args.mtp > 0:
-            import speculative
-
-            decoder = speculative.MTPDecoder(model, drafts=args.mtp)
-            ids = tokenizer.encode(prompt)
-            tokens = list(decoder.generate(ids, args.max_tokens, stop=set(tokenizer.eos_token_ids)))
-            s = decoder.stats
-            print(tokenizer.decode(tokens))
-            print(f"MTP {args.mtp} drafts: acceptance {s.acceptance:.2f}, {s.tokens_per_round:.2f} tokens/round, "
-                  f"decode {(s.tokens - 1) / max(s.decode_seconds, 1e-9):.2f} tok/s, ttft {s.ttft:.2f} s")
-        else:
-            print(generate(model, tokenizer, prompt, max_tokens=args.max_tokens, verbose=True))
+        print(generate(model, tokenizer, prompt, max_tokens=args.max_tokens, verbose=True))
 
 
 if __name__ == "__main__":
