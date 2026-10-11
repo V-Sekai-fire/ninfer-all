@@ -112,8 +112,9 @@ class NinferText:
         codes = np.frombuffer(data, np.uint8, count=code_bytes).reshape(rows, columns // 4)
         scales = np.frombuffer(data, np.float16, count=rows * groups,
                                offset=_align(code_bytes, 256)).reshape(rows, groups)
-        packed = _LUT[codes[row_begin:row_end]]
-        return np.ascontiguousarray(packed).view(np.uint32), scales[row_begin:row_end]
+        # The byte remap runs on the GPU; mx.take gathers each code byte's MLX word.
+        packed = mx.take(mx.array(_LUT), mx.array(codes[row_begin:row_end]))
+        return packed.view(mx.uint32), mx.array(scales[row_begin:row_end])
 
     def t2(self, name: str):
         """Return (packed uint32 [N, K/16], fp16 scales [N, K/128]) for one logical binding."""
@@ -129,7 +130,7 @@ class NinferText:
             w, s = self._t2_rows(part["object"], begin // columns, end // columns)
             words.append(w)
             scales.append(s)
-        return np.concatenate(words), np.concatenate(scales)
+        return mx.concatenate(words), mx.concatenate(scales)
 
 
 def hadamard_transform(x: mx.array, signs: mx.array) -> mx.array:
@@ -173,9 +174,8 @@ class OffsetRMSNorm(nn.Module):
         return mx.fast.rms_norm(x.astype(mx.float32), self.weight, self.eps).astype(x.dtype)
 
 
-def _quantized(words: np.ndarray, scales: np.ndarray, prefix: str) -> dict:
-    s = mx.array(scales)
-    return {prefix + ".weight": mx.array(words), prefix + ".scales": s, prefix + ".biases": -s}
+def _quantized(words: mx.array, scales: mx.array, prefix: str) -> dict:
+    return {prefix + ".weight": words, prefix + ".scales": scales, prefix + ".biases": -scales}
 
 
 def _offset_norm(text: NinferText, name: str) -> mx.array:
@@ -201,8 +201,8 @@ def text_weights(text: NinferText, config: dict) -> tuple[dict, dict]:
     def linear(path: str, binding: str | list[str], signs_from: list[str] | None = None) -> None:
         names = [binding] if isinstance(binding, str) else binding
         pieces = [text.t2(n) for n in names]
-        words = np.concatenate([p[0] for p in pieces])
-        scales = np.concatenate([p[1] for p in pieces])
+        words = mx.concatenate([p[0] for p in pieces])
+        scales = mx.concatenate([p[1] for p in pieces])
         weights.update(_quantized(words, scales, path))
         quantized[path] = shared_signs(signs_from or names)
 
@@ -232,8 +232,8 @@ def text_weights(text: NinferText, config: dict) -> tuple[dict, dict]:
             qw, qs = text.t2(g + "query")
             gw, gs = text.t2(g + "gate")
             # mlx-lm splits each head's q_proj rows as [query rows, gate rows].
-            words = np.stack([qw.reshape(heads, head_dim, -1), gw.reshape(heads, head_dim, -1)], 1)
-            scales = np.stack([qs.reshape(heads, head_dim, -1), gs.reshape(heads, head_dim, -1)], 1)
+            words = mx.stack([qw.reshape(heads, head_dim, -1), gw.reshape(heads, head_dim, -1)], 1)
+            scales = mx.stack([qs.reshape(heads, head_dim, -1), gs.reshape(heads, head_dim, -1)], 1)
             weights.update(_quantized(words.reshape(2 * heads * head_dim, -1),
                                       scales.reshape(2 * heads * head_dim, -1), a + "q_proj"))
             quantized[a + "q_proj"] = shared_signs([g + "query", g + "gate"])
@@ -274,6 +274,8 @@ def load(path: str | Path, tokenizer_config: dict | None = None, **_ignored):
     from mlx_lm.models import qwen3_5
     from mlx_lm.tokenizer_utils import load as load_tokenizer
 
+    if mx.default_device() != mx.gpu or not mx.metal.is_available():
+        raise RuntimeError("ninfer_mlx runs inference on the Metal GPU; none is available")
     text = NinferText(Path(path))
     text.check_layer_types()
     config = text.config()
