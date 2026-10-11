@@ -1,14 +1,22 @@
 [workspace]
 name = "ninfer-all-v-sekai"
-description = "Windows and Linux sm_89 builds and dev.* desync releases of ninfer-all for Ternary Bonsai 2 27B Heretic"
+description = "Windows and Linux sm_89 builds and dev.* desync releases of ninfer-all for Ternary Bonsai 2 27B Heretic; the converter also runs on macOS"
 channels = ["conda-forge"]
-platforms = ["win-64", "linux-64"]
+platforms = ["win-64", "linux-64", "osx-arm64"]
 
 [dependencies]
 nushell = ">=0.116"
+git = "*"
+python = "3.12.*"
+jinja2 = "*"
+
+# The CUDA engine builds only on Windows and Linux. macOS has no CUDA.
+[feature.build]
+platforms = ["win-64", "linux-64"]
+
+[feature.build.dependencies]
 cmake = ">=3.28"
 ninja = "*"
-git = "*"
 go = ">=1.25"
 zstd = ">=1.5.7,<2"
 cuda-nvcc = "13.*"
@@ -22,16 +30,15 @@ cuda-version = "13.*"
 ffmpeg = { version = "7.*", build = "lgpl*" }
 libcurl = ">=8"
 pkg-config = "*"
-python = "3.12.*"
-jinja2 = "*"
 
-[target.linux-64.dependencies]
+[feature.build.target.linux-64.dependencies]
 gxx_linux-64 = "14.*"
 sysroot_linux-64 = "2.28.*"
 patchelf = "*"
 cuda-driver-dev = "13.*"
 zlib = "*"
 
+# The converter is pure Python on the CPU, so it runs on every platform.
 [feature.convert.dependencies]
 numpy = "*"
 safetensors = "*"
@@ -41,4 +48,4 @@ gguf = ">=0.19"
 
 [environments]
 default = { features = ["convert"], solve-group = "default" }
-build = { features = [], solve-group = "default" }
+build = { features = ["build"], solve-group = "default" }
