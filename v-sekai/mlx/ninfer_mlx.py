@@ -99,38 +99,62 @@ class NinferText:
             return mx.array(np.frombuffer(data, np.float32).reshape(record.shape))
         raise ValueError(f"{name}: {record.format} is not a dense format")
 
-    def _t2_rows(self, object_id: str, row_begin: int, row_end: int):
-        record = self._record(object_id)
-        if record.format != "t2_g128_fp16" or record.layout != "row_split_k128_v1":
-            raise ValueError(f"{object_id}: {record.format}/{record.layout} is not t2 row-split")
-        rows, columns = record.shape
-        if columns % GROUP:
-            raise ValueError(f"{object_id}: K={columns} is not a multiple of {GROUP}")
-        groups = columns // GROUP
-        code_bytes = rows * columns // 4
-        data = self._raw(object_id)
-        codes = np.frombuffer(data, np.uint8, count=code_bytes).reshape(rows, columns // 4)
-        scales = np.frombuffer(data, np.float16, count=rows * groups,
-                               offset=_align(code_bytes, 256)).reshape(rows, groups)
-        # The byte remap runs on the GPU; mx.take gathers each code byte's MLX word.
-        packed = mx.take(mx.array(_LUT), mx.array(codes[row_begin:row_end]))
-        return packed.view(mx.uint32), mx.array(scales[row_begin:row_end])
+    def _rows(self, object_id: str, row_begin: int, row_end: int):
+        """Rows [row_begin, row_end) of a row-split object as MLX affine (words, scales, biases, bits, group).
 
-    def t2(self, name: str):
-        """Return (packed uint32 [N, K/16], fp16 scales [N, K/128]) for one logical binding."""
+        t2_g128: code t in {-1,0,1} -> u = t + 1, bias -s. q8_g32: code q in [-127,127] -> u = q + 128,
+        bias -128 s. Both decode to code * scale exactly; the remap runs on the GPU.
+        """
+        record = self._record(object_id)
+        if record.layout != "row_split_k128_v1":
+            raise ValueError(f"{object_id}: layout {record.layout} is not row-split")
+        rows, columns = record.shape
+        if columns % 128:
+            raise ValueError(f"{object_id}: K={columns} is not a multiple of 128")
+        if record.format == "t2_g128_fp16":
+            bits, group, code_bytes = 2, GROUP, rows * columns // 4
+        elif record.format == "q8_g32_fp16":
+            bits, group, code_bytes = 8, 32, rows * columns
+        else:
+            raise ValueError(f"{object_id}: {record.format} has no MLX repack yet")
+        groups = columns // group
+        data = self._raw(object_id)
+        codes = np.frombuffer(data, np.uint8, count=code_bytes).reshape(rows, -1)[row_begin:row_end]
+        scales = mx.array(np.frombuffer(data, np.float16, count=rows * groups,
+                                        offset=_align(code_bytes, 256)).reshape(rows, groups)[row_begin:row_end])
+        if bits == 2:
+            # mx.take gathers each code byte's MLX word.
+            words = mx.take(mx.array(_LUT), mx.array(codes)).view(mx.uint32)
+            return words, scales, -scales, bits, group
+        words = (mx.array(codes) ^ 0x80).view(mx.uint32)  # two's complement q + 128 == q XOR 0x80
+        return words, scales, scales * -128.0, bits, group
+
+    def rowsplit(self, name: str):
+        """One logical binding as (words, scales, biases, bits, group), joining its parts by rows."""
         binding = self.bindings[name]
         parts = binding.get("parts") or [{"object": binding["object"], "range": None}]
-        words, scales = [], []
+        pieces = []
         for part in parts:
             record = self._record(part["object"])
             columns = record.shape[1]
             begin, end = part["range"] or (0, record.shape[0] * columns)
             if begin % columns or end % columns:
                 raise ValueError(f"{name}: range {begin}..{end} does not cover whole rows")
-            w, s = self._t2_rows(part["object"], begin // columns, end // columns)
-            words.append(w)
-            scales.append(s)
-        return mx.concatenate(words), mx.concatenate(scales)
+            pieces.append(self._rows(part["object"], begin // columns, end // columns))
+        if len({(p[3], p[4]) for p in pieces}) != 1:
+            raise ValueError(f"{name}: parts mix formats")
+        return (mx.concatenate([p[0] for p in pieces]), mx.concatenate([p[1] for p in pieces]),
+                mx.concatenate([p[2] for p in pieces]), pieces[0][3], pieces[0][4])
+
+    def t2(self, name: str):
+        """(words, scales) of a t2_g128_fp16 binding."""
+        words, scales, _, bits, _ = self.rowsplit(name)
+        if bits != 2:
+            raise ValueError(f"{name} is not t2_g128_fp16")
+        return words, scales
+
+    def int32(self, name: str) -> mx.array:
+        return mx.array(np.frombuffer(self._raw(self.bindings[name]["object"]), np.int32))
 
 
 def hadamard_transform(x: mx.array, signs: mx.array) -> mx.array:
@@ -174,85 +198,166 @@ class OffsetRMSNorm(nn.Module):
         return mx.fast.rms_norm(x.astype(mx.float32), self.weight, self.eps).astype(x.dtype)
 
 
-def _quantized(words: mx.array, scales: mx.array, prefix: str) -> dict:
-    return {prefix + ".weight": words, prefix + ".scales": scales, prefix + ".biases": -scales}
+def _quantized(words: mx.array, scales: mx.array, biases: mx.array, prefix: str) -> dict:
+    return {prefix + ".weight": words, prefix + ".scales": scales, prefix + ".biases": biases}
 
 
 def _offset_norm(text: NinferText, name: str) -> mx.array:
     return text.dense(name).astype(mx.float32) + 1.0
 
 
-def text_weights(text: NinferText, config: dict) -> tuple[dict, dict]:
-    """Map ninfer bindings onto mlx-lm Qwen3.5 parameter paths.
+class _Weights:
+    """Collects MLX parameters; quantized[path] = (hadamard signs or None, bits, group)."""
 
-    Returns the weights and, for every quantized path, its input's Hadamard signs (or None).
-    """
-    weights, quantized = {}, {}
-    base = "language_model.model."
+    def __init__(self, text: NinferText) -> None:
+        self.text, self.weights, self.quantized = text, {}, {}
 
-    def shared_signs(names: list[str]):
-        ids = {n: text.signs(n) for n in names}
-        first = ids[names[0]]
-        for n, v in ids.items():
+    def shared_signs(self, names: list[str]):
+        found = {n: self.text.signs(n) for n in names}
+        first = found[names[0]]
+        for n, v in found.items():
             if (v is None) != (first is None) or (v is not None and not mx.array_equal(v, first)):
                 raise ValueError(f"{names}: fused parts read differently rotated inputs")
         return first
 
-    def linear(path: str, binding: str | list[str], signs_from: list[str] | None = None) -> None:
+    def linear(self, path: str, binding: str | list[str], signs_from: list[str] | None = None) -> None:
         names = [binding] if isinstance(binding, str) else binding
-        pieces = [text.t2(n) for n in names]
-        words = mx.concatenate([p[0] for p in pieces])
-        scales = mx.concatenate([p[1] for p in pieces])
-        weights.update(_quantized(words, scales, path))
-        quantized[path] = shared_signs(signs_from or names)
+        pieces = [self.text.rowsplit(n) for n in names]
+        if len({(p[3], p[4]) for p in pieces}) != 1:
+            raise ValueError(f"{names}: fused parts mix formats")
+        cat = [mx.concatenate([p[i] for p in pieces]) for i in range(3)]
+        self.weights.update(_quantized(*cat, path))
+        self.quantized[path] = (self.shared_signs(signs_from or names), pieces[0][3], pieces[0][4])
 
+    def query_gate(self, path: str, query: str, gate: str, heads: int, head_dim: int) -> None:
+        # mlx-lm splits each head's q_proj rows as [query rows, gate rows].
+        q, g = self.text.rowsplit(query), self.text.rowsplit(gate)
+        stacked = [mx.stack([q[i].reshape(heads, head_dim, -1), g[i].reshape(heads, head_dim, -1)], 1)
+                   .reshape(2 * heads * head_dim, -1) for i in range(3)]
+        self.weights.update(_quantized(*stacked, path))
+        self.quantized[path] = (self.shared_signs([query, gate]), q[3], q[4])
+
+    def offset_norm(self, path: str, binding: str) -> None:
+        self.weights[path] = _offset_norm(self.text, binding)
+
+    def attention_block(self, src: str, dst: str, config: dict) -> None:
+        g, a = src + "attention/", dst + "self_attn."
+        self.query_gate(a + "q_proj", g + "query", g + "gate", config["num_attention_heads"], config["head_dim"])
+        self.linear(a + "k_proj", g + "key")
+        self.linear(a + "v_proj", g + "value")
+        self.linear(a + "o_proj", g + "output")
+        self.offset_norm(a + "q_norm.weight", g + "query_norm")
+        self.offset_norm(a + "k_norm.weight", g + "key_norm")
+
+    def ffn_block(self, src: str, dst: str) -> None:
+        m, p = src + "mlp/", dst + "mlp."
+        self.linear(p + "gate_proj", m + "gate")
+        self.linear(p + "up_proj", m + "up")
+        self.linear(p + "down_proj", m + "down")
+
+
+def text_weights(text: NinferText, config: dict) -> tuple[dict, dict]:
+    """Map ninfer text bindings onto mlx-lm Qwen3.5 parameter paths."""
+    w = _Weights(text)
+    base = "language_model.model."
     # The token table has no Use; its rows restore with the output head's hidden-width signs.
-    linear(base + "embed_tokens", "text/token_embedding", signs_from=["text/output_head"])
-    linear("language_model.lm_head", "text/output_head")
-    weights[base + "norm.weight"] = _offset_norm(text, "text/final_norm")
-
-    heads, head_dim = config["num_attention_heads"], config["head_dim"]
+    w.linear(base + "embed_tokens", "text/token_embedding", signs_from=["text/output_head"])
+    w.linear("language_model.lm_head", "text/output_head")
+    w.offset_norm(base + "norm.weight", "text/final_norm")
     for i in range(config["num_hidden_layers"]):
         src, dst = f"text/layers/{i}/", f"{base}layers.{i}."
-        weights[dst + "input_layernorm.weight"] = _offset_norm(text, src + "input_norm")
-        weights[dst + "post_attention_layernorm.weight"] = _offset_norm(text, src + "post_attention_norm")
+        w.offset_norm(dst + "input_layernorm.weight", src + "input_norm")
+        w.offset_norm(dst + "post_attention_layernorm.weight", src + "post_attention_norm")
         if (i + 1) % FULL_ATTENTION_INTERVAL:
             g, a = src + "gdn/", dst + "linear_attn."
-            linear(a + "in_proj_qkv", [g + "query", g + "key", g + "value"])
-            linear(a + "in_proj_z", g + "z")
-            linear(a + "out_proj", g + "output")
-            weights[a + "in_proj_a.weight"] = text.dense(g + "a_projection")
-            weights[a + "in_proj_b.weight"] = text.dense(g + "b_projection")
-            weights[a + "conv1d.weight"] = text.dense(g + "convolution").T[:, :, None]
-            weights[a + "A_log"] = text.dense(g + "a_log")
-            weights[a + "dt_bias"] = text.dense(g + "dt_bias")
-            weights[a + "norm.weight"] = text.dense(g + "norm")
+            w.linear(a + "in_proj_qkv", [g + "query", g + "key", g + "value"])
+            w.linear(a + "in_proj_z", g + "z")
+            w.linear(a + "out_proj", g + "output")
+            w.weights[a + "in_proj_a.weight"] = text.dense(g + "a_projection")
+            w.weights[a + "in_proj_b.weight"] = text.dense(g + "b_projection")
+            w.weights[a + "conv1d.weight"] = text.dense(g + "convolution").T[:, :, None]
+            w.weights[a + "A_log"] = text.dense(g + "a_log")
+            w.weights[a + "dt_bias"] = text.dense(g + "dt_bias")
+            w.weights[a + "norm.weight"] = text.dense(g + "norm")
         else:
-            g, a = src + "attention/", dst + "self_attn."
-            qw, qs = text.t2(g + "query")
-            gw, gs = text.t2(g + "gate")
-            # mlx-lm splits each head's q_proj rows as [query rows, gate rows].
-            words = mx.stack([qw.reshape(heads, head_dim, -1), gw.reshape(heads, head_dim, -1)], 1)
-            scales = mx.stack([qs.reshape(heads, head_dim, -1), gs.reshape(heads, head_dim, -1)], 1)
-            weights.update(_quantized(words.reshape(2 * heads * head_dim, -1),
-                                      scales.reshape(2 * heads * head_dim, -1), a + "q_proj"))
-            quantized[a + "q_proj"] = shared_signs([g + "query", g + "gate"])
-            linear(a + "k_proj", g + "key")
-            linear(a + "v_proj", g + "value")
-            linear(a + "o_proj", g + "output")
-            weights[a + "q_norm.weight"] = _offset_norm(text, g + "query_norm")
-            weights[a + "k_norm.weight"] = _offset_norm(text, g + "key_norm")
-        m, p = src + "mlp/", dst + "mlp."
-        linear(p + "gate_proj", m + "gate")
-        linear(p + "up_proj", m + "up")
-        linear(p + "down_proj", m + "down")
-    return weights, quantized
+            w.attention_block(src, dst, config)
+        w.ffn_block(src, dst)
+    return w.weights, w.quantized
+
+
+class MTP(nn.Module):
+    """Qwen3.5 MTP: one gated-attention block over [norm(embedding), norm(target hidden)].
+
+    Mirrors ninfer's mtp_forward_stem/tail; the output is final-normalised and is both the draft
+    head's input and the next recursive step's hidden.
+    """
+
+    def __init__(self, args, eps: float) -> None:
+        from mlx_lm.models import qwen3_5
+
+        super().__init__()
+        h = args.hidden_size
+        self.embedding_norm = OffsetRMSNorm(h, eps)
+        self.hidden_norm = OffsetRMSNorm(h, eps)
+        self.final_norm = OffsetRMSNorm(h, eps)
+        self.input_projection = nn.Linear(2 * h, h, bias=False)
+        self.layer = qwen3_5.DecoderLayer(args, layer_idx=FULL_ATTENTION_INTERVAL - 1)
+
+    def __call__(self, embedding: mx.array, hidden: mx.array, cache) -> mx.array:
+        from mlx_lm.models.base import create_attention_mask
+
+        x = mx.concatenate([self.embedding_norm(embedding), self.hidden_norm(hidden)], axis=-1)
+        u = self.input_projection(x)
+        u = self.layer(u, mask=create_attention_mask(u, cache), cache=cache)
+        return self.final_norm(u)
+
+
+class Drafter(nn.Module):
+    """The artifact's MTP head and indexed proposal head (draft logits over a token shortlist)."""
+
+    def __init__(self, args, eps: float, proposal_rows: int) -> None:
+        super().__init__()
+        self.mtp = MTP(args, eps)
+        self.proposal = nn.Linear(args.hidden_size, proposal_rows, bias=False)
+
+
+def drafter_weights(text: NinferText, config: dict) -> tuple[dict, dict]:
+    w = _Weights(text)
+    w.linear("mtp.input_projection", "mtp/input_projection")
+    w.offset_norm("mtp.embedding_norm.weight", "mtp/embedding_norm")
+    w.offset_norm("mtp.hidden_norm.weight", "mtp/hidden_norm")
+    w.offset_norm("mtp.final_norm.weight", "mtp/final_norm")
+    w.offset_norm("mtp.layer.input_layernorm.weight", "mtp/layers/0/input_norm")
+    w.offset_norm("mtp.layer.post_attention_layernorm.weight", "mtp/layers/0/post_attention_norm")
+    w.attention_block("mtp/layers/0/", "mtp.layer.", config)
+    w.ffn_block("mtp/layers/0/", "mtp.layer.")
+    w.linear("proposal", "proposal/head")
+    return w.weights, w.quantized
+
+
+def _materialise(module: nn.Module, weights: dict, quantized: dict) -> None:
+    def predicate(path, _module):
+        if path not in quantized:
+            return False
+        _, bits, group = quantized[path]
+        return {"bits": bits, "group_size": group}
+
+    nn.quantize(module, class_predicate=predicate)
+    module.load_weights(list(weights.items()), strict=True)
+    for path, sub in module.named_modules():
+        if path in quantized:
+            sub.__class__ = TernaryEmbedding if isinstance(sub, nn.QuantizedEmbedding) else TernaryLinear
+            # A plain attribute keeps the signs out of the parameter tree.
+            sub.__dict__["_signs"] = quantized[path][0]
+    mx.eval(module.parameters())
+    module.eval()
 
 
 def _install_norms(model: nn.Module, eps: float) -> None:
     targets = ("input_layernorm", "post_attention_layernorm", "q_norm", "k_norm")
     for path, module in list(model.named_modules()):
-        if isinstance(module, nn.RMSNorm) and (path.endswith(targets) or path == "language_model.model.norm"):
+        if isinstance(module, nn.RMSNorm) and (path.endswith(targets) or path == "language_model.model.norm"
+                                                or path.endswith("_norm")):
             parent_path, _, leaf = path.rpartition(".")
             parent = model
             for part in parent_path.split("."):
@@ -269,8 +374,11 @@ def _resource_dir(text: NinferText) -> Path:
     return cache
 
 
-def load(path: str | Path, tokenizer_config: dict | None = None, **_ignored):
-    """Load a .ninfer text model as an (mlx-lm Model, TokenizerWrapper) pair."""
+def load(path: str | Path, tokenizer_config: dict | None = None, draft: bool = False, **_ignored):
+    """Load a .ninfer text model as an (mlx-lm Model, TokenizerWrapper) pair.
+
+    With draft=True the MTP and proposal heads are attached as model._drafter.
+    """
     from mlx_lm.models import qwen3_5
     from mlx_lm.tokenizer_utils import load as load_tokenizer
 
@@ -282,17 +390,14 @@ def load(path: str | Path, tokenizer_config: dict | None = None, **_ignored):
     model = qwen3_5.Model(qwen3_5.ModelArgs.from_dict(config))
     _install_norms(model, config["rms_norm_eps"])
 
-    weights, quantized = text_weights(text, config)
-    nn.quantize(model, group_size=GROUP, bits=2,
-                class_predicate=lambda p, m: p in quantized)
-    model.load_weights(list(weights.items()), strict=True)
-    for path_, module in model.named_modules():
-        if path_ in quantized:
-            module.__class__ = TernaryEmbedding if isinstance(module, nn.QuantizedEmbedding) else TernaryLinear
-            # A plain attribute keeps the signs out of the parameter tree.
-            module.__dict__["_signs"] = quantized[path_]
-    mx.eval(model.parameters())
-    model.eval()
+    _materialise(model, *text_weights(text, config))
+    if draft and "mtp" in text.artifact.directory.components:
+        args = model.language_model.args
+        drafter = Drafter(args, config["rms_norm_eps"], text.int32("proposal/token_ids").size)
+        _install_norms(drafter, config["rms_norm_eps"])
+        _materialise(drafter, *drafter_weights(text, config))
+        drafter.__dict__["token_ids"] = text.int32("proposal/token_ids")
+        model.__dict__["_drafter"] = drafter
 
     resources = _resource_dir(text)
     generation = json.loads(text.resource("generation_config.json"))
@@ -316,6 +421,8 @@ def main(argv=None) -> None:
     gen.add_argument("--prompt", required=True)
     gen.add_argument("--max-tokens", type=int, default=128)
     gen.add_argument("--no-chat", action="store_true", help="feed the prompt without the chat template")
+    gen.add_argument("--mtp", type=int, default=0, metavar="N",
+                     help="draft N tokens per round with the artifact's MTP head (greedy only)")
     sub.add_parser("serve", help="OpenAI-compatible server; the remaining flags go to mlx_lm.server")
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["serve"]:
@@ -330,12 +437,23 @@ def main(argv=None) -> None:
     if args.command == "generate":
         from mlx_lm import generate
 
-        model, tokenizer = load(args.model)
+        model, tokenizer = load(args.model, draft=args.mtp > 0)
         prompt = args.prompt
         if not args.no_chat:
             prompt = tokenizer.apply_chat_template(
                 [{"role": "user", "content": prompt}], add_generation_prompt=True, tokenize=False)
-        print(generate(model, tokenizer, prompt, max_tokens=args.max_tokens, verbose=True))
+        if args.mtp > 0:
+            import speculative
+
+            decoder = speculative.MTPDecoder(model, drafts=args.mtp)
+            ids = tokenizer.encode(prompt)
+            tokens = list(decoder.generate(ids, args.max_tokens, stop=set(tokenizer.eos_token_ids)))
+            s = decoder.stats
+            print(tokenizer.decode(tokens))
+            print(f"MTP {args.mtp} drafts: acceptance {s.acceptance:.2f}, {s.tokens_per_round:.2f} tokens/round, "
+                  f"decode {(s.tokens - 1) / max(s.decode_seconds, 1e-9):.2f} tok/s, ttft {s.ttft:.2f} s")
+        else:
+            print(generate(model, tokenizer, prompt, max_tokens=args.max_tokens, verbose=True))
 
 
 if __name__ == "__main__":

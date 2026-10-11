@@ -19,6 +19,11 @@ def oracle(text, object_id, rows):
     record = text.artifact.object(object_id)
     n, k = record.shape
     data = text.artifact.read_object(object_id)
+    if record.format == "q8_g32_fp16":
+        codes = np.frombuffer(data, np.int8, count=n * k).reshape(n, k)[rows[0]:rows[1]].astype(np.float64)
+        offset = (n * k + 255) // 256 * 256
+        scales = np.frombuffer(data, np.float16, count=n * k // 32, offset=offset).reshape(n, k // 32)
+        return codes * np.repeat(scales[rows[0]:rows[1]].astype(np.float64), 32, axis=1)
     code_bytes = n * k // 4
     packed = np.frombuffer(data, np.uint8, count=code_bytes).reshape(n, k // 4)[rows[0]:rows[1]]
     lanes = np.stack([(packed >> (2 * i)) & 3 for i in range(4)], -1).reshape(rows[1] - rows[0], k)
@@ -29,15 +34,17 @@ def oracle(text, object_id, rows):
     return signed * np.repeat(scales[rows[0]:rows[1]].astype(np.float64), 128, axis=1)
 
 
-def mlx_decode(words, scales):
-    s = mx.array(scales)
-    return np.asarray(mx.dequantize(mx.array(words), s, -s, group_size=128, bits=2).astype(mx.float32))
+def mlx_decode(words, scales, biases=None, bits=2, group=128):
+    """Dequantise in fp32 (fp16 scales would round q8's s * u)."""
+    s = mx.array(scales).astype(mx.float32)
+    b = -s if biases is None else mx.array(biases).astype(mx.float32)
+    return np.asarray(mx.dequantize(mx.array(words), s, b, group_size=group, bits=bits))
 
 
 def check(text, name, rows_limit=512):
     binding = text.bindings[name]
     parts = binding.get("parts") or [{"object": binding["object"], "range": None}]
-    words, scales = text.t2(name)
+    words, scales, biases, bits, group = text.rowsplit(name)
     expected, start = [], 0
     for part in parts:
         record = text.artifact.object(part["object"])
@@ -46,7 +53,7 @@ def check(text, name, rows_limit=512):
         expected.append(oracle(text, part["object"], (begin // k, end // k)))
     expected = np.concatenate(expected)
     take = slice(0, min(rows_limit, expected.shape[0]))
-    got = mlx_decode(words[take], scales[take])
+    got = mlx_decode(words[take], scales[take], biases[take], bits, group)
     return np.array_equal(got.astype(np.float64), expected[take]), expected[take]
 
 
@@ -59,6 +66,10 @@ def main(path):
         "text/layers/3/attention/gate",
         "text/layers/63/mlp/down",
         "text/output_head",
+        "mtp/input_projection",          # q8_g32
+        "mtp/layers/0/attention/gate",  # q8, third part of a shared object
+        "mtp/layers/0/mlp/down",
+        "proposal/head",
     ]
     failures = 0
     for name in names:
