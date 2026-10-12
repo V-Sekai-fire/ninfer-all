@@ -12,7 +12,7 @@ from collections.abc import Mapping
 
 from .official_recipes import RECIPES
 from .pipeline import convert
-from .proposal import DEFAULT_RANKING, add_official_proposal
+from .proposal import DEFAULT_RANKING, add_official_proposal, portable_path
 from .qwen3_5 import build_model as build_qwen3_5
 from .qwen4_exp import _ARCHITECTURES as QWEN4_EXP_ARCHITECTURES
 from .qwen4_exp import build_model as build_qwen4_exp
@@ -69,21 +69,6 @@ class SourceInputs(Mapping):
         return {
             name: {"path": str(source.path)} for name, source in self._sources.items()
         }
-
-
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-
-
-def portable_path(path: Path, root: Path = REPOSITORY_ROOT) -> str:
-    """Name a provenance input without the converting host's directories.
-
-    Inside the repository the path is repository-relative; outside it only the file name is kept.
-    """
-    resolved = Path(path).resolve()
-    try:
-        return resolved.relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return resolved.name
 
 
 def _pairs(values, label):

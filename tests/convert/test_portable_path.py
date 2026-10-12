@@ -1,7 +1,6 @@
 from pathlib import Path
 
-from tools.convert.__main__ import REPOSITORY_ROOT, portable_path
-from tools.convert.proposal import DEFAULT_RANKING
+from tools.convert.proposal import DEFAULT_RANKING, REPOSITORY_ROOT, portable_path
 
 
 def test_default_ranking_is_repository_relative():
