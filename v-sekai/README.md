@@ -46,6 +46,35 @@ engine needs CUDA.
 - DFlash2 adapter: [ProCreations/Ternary-Bonsai-2-27B-DFlash2](https://huggingface.co/ProCreations/Ternary-Bonsai-2-27B-DFlash2).
 - Recipe: `bonsai2_27b_ternary`, as [docs/weight-conversion.md](../docs/weight-conversion.md#ternary-bonsai-2-27b) describes it.
 
+## Windows MSI with the NInfer service
+
+The `V-Sekai MSI release` workflow (`.github/workflows/v-sekai-msi-release.yml`) makes a whole
+Windows release from one manual run. Its input is a tag such as `v0.12.0-dev.1`.
+
+1. `convert` runs on an Ubuntu runner. It fetches the sources and converts the model on the CPU
+   with `convert.nu --max-file-bytes 1800000000`. The artifact is an entry file plus
+   `.part-NNNN` files, each below 2 GB, which NInfer reads as one artifact.
+2. `build` runs `build.nu` on a Windows runner and builds `ninfer-serve` for sm_89.
+3. `package` runs `msi.nu`. It builds the service host `ninfer-service.exe` (in
+   `installer/src/service.cpp`) and stages the build, the app-local MSVC runtime, the model parts,
+   the notices and `msi/ninfer-serve.args`. WiX 5 then builds `msi/ninfer.wxs` into one MSI with
+   external CABs, one CAB per model part. The job installs the MSI, compares every installed file
+   with `payload-msi.sha256`, and checks that the NInfer service is running and started
+   `ninfer-serve`. It then uninstalls the MSI and publishes the release. Tags with `-dev`,
+   `-beta` or `-rc` are published as prereleases. `reuse_run` packages the artifacts of an
+   earlier run and skips steps 1 and 2.
+
+The runners have no GPU, so the workflow does not run the model.
+
+To install, download the `.msi` and every `ninfer*.cab` into one folder and run the MSI. It
+installs into `C:\Program Files\V-Sekai\NInfer` and registers the automatic-start `NInfer`
+service. The service serves `http://127.0.0.1:8080/v1`. The host needs only an NVIDIA driver of
+the CUDA 13 branch. The flags are in `C:\ProgramData\V-Sekai\NInfer\ninfer-serve.args`, one
+option per line, and upgrades and uninstalls keep the file. The log is
+`C:\ProgramData\V-Sekai\NInfer\logs\ninfer-serve.log`. When `ninfer-serve` exits with an
+error, the service starts it again after 10 s, then 30 s, then every 60 s. Run
+`bin\ninfer-service.exe --console` to run the same command in the foreground.
+
 ## Serving
 
 After installation, run `nu serve.nu` in the install directory

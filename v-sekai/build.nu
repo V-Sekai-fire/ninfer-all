@@ -128,7 +128,7 @@ def write-buildinfo [root: path, dist: path, os: string, arch: string] {
         cxx: $cxx
         cmake: (^cmake --version | lines | first)
     } | to json | save -f ($dist | path join BUILDINFO.json)
-    let sums = (glob ($dist | path join "**" "*") --no-dir
+    let sums = (do { cd $dist; glob "**/*" --no-dir }
         | where {|f| ($f | path basename) not-in [SHA256SUMS BUILDINFO.json] }
         | sort
         | each {|f| $"(open --raw $f | hash sha256)  ($f | path relative-to $dist | str replace -a '\\' '/')" })

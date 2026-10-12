@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MPL-2.0
 # The desync release installers and volume packer, ported from
 # V-Sekai-fire/service-language-model tray/CMakeLists.txt.
-# Windows: ninfer-setup (shipped as setup.exe) and payload-pack.
+# Windows: ninfer-setup (shipped as setup.exe), payload-pack, and ninfer-service (the MSI's
+# Windows service host).
 # Linux: ninfer-install, which restores payload-linux.caidx from the same volumes.
 cmake_minimum_required(VERSION 3.24)
 project(ninfer_installer LANGUAGES CXX)
@@ -22,9 +23,13 @@ if(WIN32)
     target_link_libraries(ninfer-setup PRIVATE shell32 winhttp)
     target_link_options(ninfer-setup PRIVATE "/MANIFESTUAC:level='requireAdministrator'")
     add_executable(payload-pack src/pack.cpp)
+    # The service host the MSI installs as the NInfer Windows service.
+    add_executable(ninfer-service src/service.cpp)
+    target_link_libraries(ninfer-service PRIVATE shell32 ole32)
     if(MSVC)
         target_compile_options(ninfer-setup PRIVATE /W4 /permissive-)
         target_compile_options(payload-pack PRIVATE /W4 /permissive-)
+        target_compile_options(ninfer-service PRIVATE /W4 /permissive-)
     endif()
 else()
     add_executable(ninfer-install src/install-portable.cpp)

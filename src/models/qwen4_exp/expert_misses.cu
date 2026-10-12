@@ -21,6 +21,10 @@
 #include <string>
 #include <thread>
 
+#if defined(__x86_64__) || defined(_M_X64)
+#    include <immintrin.h>
+#endif
+
 #ifdef _WIN32
 #    ifndef NOMINMAX
 #        define NOMINMAX
@@ -236,7 +240,7 @@ public:
             DWORD done    = 0;
             const DWORD request =
                 static_cast<DWORD>(std::min<std::size_t>(bytes, std::size_t(1) << 30));
-            if (!ReadFile(handle_, out, request, &done, &at) || done == 0) {
+            if (!::ReadFile(handle_, out, request, &done, &at) || done == 0) {
                 throw std::runtime_error("expert misses: read failed");
             }
 #else
@@ -317,7 +321,7 @@ public:
 private:
     static void pause() {
 #if defined(__x86_64__) || defined(_M_X64)
-        __builtin_ia32_pause();
+        _mm_pause();
 #else
         std::this_thread::yield();
 #endif
@@ -979,7 +983,7 @@ struct ExpertMisses::Impl {
             }
             if (!worked) {
 #if defined(__x86_64__) || defined(_M_X64)
-                __builtin_ia32_pause();
+                _mm_pause();
 #else
                 std::this_thread::yield();
 #endif
