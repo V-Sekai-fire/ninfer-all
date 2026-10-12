@@ -68,6 +68,21 @@ class SourceInputs(Mapping):
         }
 
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+
+def portable_path(path: Path, root: Path = REPOSITORY_ROOT) -> str:
+    """Name a provenance input without the converting host's directories.
+
+    Inside the repository the path is repository-relative; outside it only the file name is kept.
+    """
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return resolved.name
+
+
 def _pairs(values, label):
     result = {}
     for value in values:
@@ -249,7 +264,7 @@ def main(argv=None):
         if args.layers is not None:
             provenance["source_layers"] = list(model.source_layers)
         if args.proposal:
-            provenance["ranking"] = str(args.ranking)
+            provenance["ranking"] = portable_path(args.ranking)
         report = convert(
             model,
             recipe,
