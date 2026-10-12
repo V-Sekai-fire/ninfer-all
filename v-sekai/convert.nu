@@ -8,6 +8,7 @@ def main [
     --sources: path = "sources"
     --out: path = "models/bonsai2-27b-heretic.ninfer"
     --device: string = "cpu"
+    --max-file-bytes: int    # split into an entry and .part-NNNN files of at most this many bytes (the MSI needs < 2 GB)
 ] {
     let root = ($env.FILE_PWD | path dirname)
     cd $root
@@ -23,7 +24,8 @@ def main [
         --proposal
         --device $device
         --name bonsai2-27b-heretic
-        --out $out)
+        --out $out
+        ...(if $max_file_bytes == null { [] } else { [--max-file-bytes $max_file_bytes] }))
     if $env.LAST_EXIT_CODE != 0 { error make {msg: "conversion failed"} }
     ls $out | print
 }
