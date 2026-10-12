@@ -10,7 +10,7 @@ namespace {
 inline float half_at(const std::uint8_t* p) {
     std::uint16_t bits;
     std::memcpy(&bits, p, 2);
-    return _cvtsh_ss(bits);
+    return _mm_cvtss_f32(_mm_cvtph_ps(_mm_cvtsi32_si128(bits)));
 }
 
 inline float reduce(__m256 v) {
