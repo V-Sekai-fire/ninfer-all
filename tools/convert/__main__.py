@@ -12,7 +12,7 @@ from collections.abc import Mapping
 
 from .official_recipes import RECIPES
 from .pipeline import convert
-from .proposal import DEFAULT_RANKING, add_official_proposal
+from .proposal import DEFAULT_RANKING, add_official_proposal, portable_path
 from .qwen3_5 import build_model as build_qwen3_5
 from .qwen4_exp import _ARCHITECTURES as QWEN4_EXP_ARCHITECTURES
 from .qwen4_exp import build_model as build_qwen4_exp
@@ -249,7 +249,7 @@ def main(argv=None):
         if args.layers is not None:
             provenance["source_layers"] = list(model.source_layers)
         if args.proposal:
-            provenance["ranking"] = str(args.ranking)
+            provenance["ranking"] = portable_path(args.ranking)
         report = convert(
             model,
             recipe,
