@@ -1,0 +1,50 @@
+name: V-Sekai provenance check
+
+# Converts Bonsai 2 Heretic v2 on a clean runner and fails if the artifact or its conversion
+# report names the runner's directories. A planted string must be caught first.
+
+on:
+  pull_request:
+    paths:
+      - tools/convert/**
+      - v-sekai/convert.nu
+      - v-sekai/fetch-sources.nu
+      - .github/workflows/v-sekai-provenance-check.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provenance:
+    name: Convert and scan for host paths
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: actions/checkout@v5
+      - uses: prefix-dev/setup-pixi@v0.11.0
+        with:
+          environments: default
+          locked: true
+          cache: true
+      - name: Fetch the conversion sources
+        run: pixi run --locked nu v-sekai/fetch-sources.nu
+      - name: Convert
+        run: pixi run --locked nu v-sekai/convert.nu --device cpu
+      - name: Scan for host paths
+        run: |
+          pattern="$HOME|$GITHUB_WORKSPACE|/home/|/Users/|runner/work"
+          echo "x${GITHUB_WORKSPACE}/tools/y" > planted
+          LC_ALL=C grep -a -q -E "$pattern" planted || { echo "::error::control did not fire"; exit 1; }
+          echo "control fires as planted"
+          fail=0
+          for f in models/bonsai2-27b-heretic.ninfer models/bonsai2-27b-heretic.ninfer.conversion.json; do
+            n=$(LC_ALL=C grep -a -o -E "$pattern" "$f" | wc -l)
+            echo "$f: $n host path(s)"
+            [ "$n" -eq 0 ] || { LC_ALL=C grep -a -o -E ".{0,40}($pattern).{0,80}" "$f" | head -5; fail=1; }
+          done
+          ls -l models
+          sha256sum models/bonsai2-27b-heretic.ninfer
+          exit $fail
