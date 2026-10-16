@@ -452,7 +452,7 @@ artifact_of() {
 }
 # The pin lives in download-model.sh's `  <model>)` block, so read it from there rather than repeating it.
 expected_size_of() {
-  sed -n "/^  $1)\$/,/^    ;;\$/ s/^ *expected_size=\\([0-9]\\+\\)\$/\\1/p" "$downloader"
+  sed -n "/^  $1)\$/,/^    ;;\$/ s/^ *expected_size=\\([0-9][0-9]*\\)\$/\\1/p" "$downloader"
 }
 for key in "${models[@]}"; do
   model="$(artifact_of "$key")"

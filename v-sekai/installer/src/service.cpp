@@ -13,6 +13,9 @@
 // The host restarts the child itself rather than through the SCM failure actions: MSI's
 // MsiServiceConfig tables are unreliable for a service installed in the same transaction.
 //
+// The host adds --device-profile and --device-profile-path: the first start calibrates the GPU's
+// routes into %ProgramData%\V-Sekai\NInfer\device-profile.json, and later starts load that file.
+//
 // ninfer-serve.args has one option per line, for example "--port 8080". A line holds the flag,
 // then optional whitespace and the value. The value is passed as one argument, so a path may
 // contain spaces. Blank lines and lines that start with '#' are skipped.
@@ -176,6 +179,10 @@ DWORD runOnce()
     std::wstring commandLine = quote(exe.wstring()) + L" " + quote(model.wstring());
     for (const auto& arg : readArgs(data / L"ninfer-serve.args"))
         commandLine += L" " + quote(arg);
+    // The first start calibrates this GPU's routes into device-profile.json; later starts load it.
+    const fs::path profile = data / L"device-profile.json";
+    commandLine += fs::exists(profile, ignored) ? L" --device-profile auto" : L" --device-profile calibrate";
+    commandLine += L" --device-profile-path " + quote(profile.wstring());
 
     SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
     HANDLE output = CreateFileW(log.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit,
