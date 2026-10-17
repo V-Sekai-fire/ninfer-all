@@ -1,0 +1,42 @@
+name: V-Sekai Windows build
+
+# Builds ninfer-serve for one card on Windows (arch 89 = RTX 4090, 86 = RTX 3090), the same way
+# the MSI workflow builds sm_89, and keeps dist/windows/ as the artifact dist-windows-sm<arch>.
+# Hosted runners have no GPU: v-sekai/desk/deploy.nu installs and tests the build on the desk.
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "CUDA architecture: 89 (RTX 4090) or 86 (RTX 3090)"
+        type: choice
+        options: ["86", "89"]
+        default: "86"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ninfer-serve (Windows, sm_${{ inputs.arch }})
+    runs-on: windows-2022
+    timeout-minutes: 360
+    env:
+      # ptxas takes about 3 GB per softmax_attention kernel; four at once fit the runner's 16 GB.
+      CMAKE_BUILD_PARALLEL_LEVEL: "4"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: prefix-dev/setup-pixi@v0.11.0
+        with:
+          environments: build
+          locked: true
+          cache: true
+      - name: Build
+        timeout-minutes: 345
+        run: pixi run --locked -e build nu v-sekai/build.nu --arch ${{ inputs.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows-sm${{ inputs.arch }}
+          path: dist/windows/
+          retention-days: 7
+          if-no-files-found: error

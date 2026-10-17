@@ -1,0 +1,15 @@
+[workspace]
+authors = ["K. S. Ernest (iFire) Lee <32321+fire@users.noreply.github.com>"]
+channels = ["conda-forge"]
+name = "model-router"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = "3.12.*"
+
+[pypi-dependencies]
+litellm = { version = ">=1.80", extras = ["proxy"] }
+prisma = ">=0.15.0, <0.16"
