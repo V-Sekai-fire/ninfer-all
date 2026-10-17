@@ -1,0 +1,38 @@
+name: V-Sekai Windows sm_86 build
+
+# Builds ninfer-serve for one RTX 3090 (sm_86) on Windows, the same way the MSI workflow builds
+# sm_89, and keeps dist/windows/ as a workflow artifact. Runs on a push to this branch.
+# Hosted runners have no GPU, so the binary is tested on the desk 3090 afterwards.
+
+on:
+  push:
+    branches: [dev/windows-sm86-build]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ninfer-serve (Windows, sm_86)
+    runs-on: windows-2022
+    timeout-minutes: 360
+    env:
+      # ptxas takes about 3 GB per softmax_attention kernel; four at once fit the runner's 16 GB.
+      CMAKE_BUILD_PARALLEL_LEVEL: "4"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: prefix-dev/setup-pixi@v0.11.0
+        with:
+          environments: build
+          locked: true
+          cache: true
+      - name: Build
+        timeout-minutes: 345
+        run: pixi run --locked -e build nu v-sekai/build.nu --arch 86
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows-sm86
+          path: dist/windows/
+          retention-days: 7
+          if-no-files-found: error
