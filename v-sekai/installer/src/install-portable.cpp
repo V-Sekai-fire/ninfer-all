@@ -561,7 +561,9 @@ int install(const fs::path& assets, const fs::path& target)
             success = false;
         }
     }
-    if (success && !runDesync(desync, {"untar", "--index", "--store", store.string(),
+    // --no-same-owner: the payload records the build host's owner (uid 1000 on the release
+    // host), and an installing user without that uid cannot chown to it.
+    if (success && !runDesync(desync, {"untar", "--no-same-owner", "--index", "--store", store.string(),
                                        index.string(), target.string()}))
     {
         std::cerr << "Desync could not restore the indexed payload.\n";
