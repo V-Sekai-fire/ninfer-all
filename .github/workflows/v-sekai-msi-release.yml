@@ -199,4 +199,11 @@ jobs:
 
           SHA256SUMS lists every asset. payload-msi.sha256 lists every installed file. Built from $GITHUB_SHA by the V-Sekai MSI release workflow. A hosted runner without a GPU checked the install (each file by SHA-256, and that the service starts ninfer-serve). That runner did not run the model.
           EOF
-          gh release create "$TAG" "$out"/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" $pre --title "$TAG" --notes-file notes.md
+          # The Linux half (release.nu --linux-only on a Linux host) may have created the release first.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$out"/* --repo "$GITHUB_REPOSITORY" --clobber
+            { cat notes.md; echo; gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body; } > notes-combined.md
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes-combined.md
+          else
+            gh release create "$TAG" "$out"/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" $pre --title "$TAG" --notes-file notes.md
+          fi
