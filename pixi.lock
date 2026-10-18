@@ -21,6 +21,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-8_kmp_llvm.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/alsa-lib-1.2.16.1-h7cc23a3_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/aom-3.9.1-hac33072_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/binutils-2.46.1-default_h4852527_103.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/binutils_impl_linux-64-2.46.1-default_hfdba357_102.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/binutils_linux-64-2.46.1-default_h4852527_102.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda
@@ -52,6 +53,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/gcc_impl_linux-64-14.4.0-h4b2a866_7.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/gcc_linux-64-14.4.0-hc469d41_2.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/gdk-pixbuf-2.44.8-h68053f1_2.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/gh-2.102.0-hfc2019e_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/git-2.56.0-pl5440h3795e67_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/gmp-6.3.0-hfd2156b_3.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/go-1.27.2-nocgo_h8a70693_0.conda
@@ -882,6 +884,16 @@ packages:
   run_exports: {}
   size: 241113
   timestamp: 1788491295568
+- conda: https://conda.anaconda.org/conda-forge/linux-64/binutils-2.46.1-default_h4852527_103.conda
+  sha256: 1198587b78b20fa00ee397d4ea1bdb5098b08100c08ad7b3e6d10912cd487466
+  md5: 3624cc8224aec1c58079dad844d354a2
+  depends:
+  - binutils_impl_linux-64 >=2.46.1,<2.46.2.0a0
+  license: GPL-3.0-only
+  license_family: GPL
+  run_exports: {}
+  size: 35373
+  timestamp: 1791565504227
 - conda: https://conda.anaconda.org/conda-forge/linux-64/binutils_impl_linux-64-2.46.1-default_hfdba357_102.conda
   sha256: fb7bf36984a37ce7e4714d1d1da0bd0e3bfc679520f5cdc184afc676fd4b5da2
   md5: a0c5e0b7f58c8ceeb08e5bc41251d5a2
@@ -1417,6 +1429,14 @@ packages:
     - gdk-pixbuf >=2.44.8,<3.0a0
   size: 581961
   timestamp: 1788490424411
+- conda: https://conda.anaconda.org/conda-forge/linux-64/gh-2.102.0-hfc2019e_0.conda
+  sha256: 7c7d9b68063b4a3588190fd82efba2c81a13d361250f4e09e57888ae2ea2cb6f
+  md5: d933d1442248e72f2559c7dc6df70e30
+  license: Apache-2.0
+  license_family: APACHE
+  run_exports: {}
+  size: 13993962
+  timestamp: 1790750717805
 - conda: https://conda.anaconda.org/conda-forge/linux-64/git-2.56.0-pl5440h3795e67_0.conda
   sha256: d5654608f2bed18580fa05e22d80093fc746cc70dea1d6a208e7a9f65b1888e0
   md5: 6dbccc130bb4e4f86c9d97af2b787a2a
