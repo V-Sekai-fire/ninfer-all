@@ -12,11 +12,10 @@ def main [--build-dir: string = "build", --sample: int = 6] {
     let before = (open --raw $sums)
 
     # Every Nth object, CUDA and C++ alike, so the sample is spread and repeatable.
-    let objects = (glob ($tree | path join "**" "*.{obj,o}") | sort)
+    let objects = (glob ($tree | path join "**" "*.o") | sort)
     let step = ([1 (($objects | length) // $sample)] | math max)
     let picked = ($objects | enumerate | where {|o| $o.index mod $step == 0 } | first $sample | get item)
-    let suffix = if $os == windows { ".exe" } else { "" }
-    let programs = ([ninfer-serve ninfer-calibrate] | each {|p| $tree | path join apps $"($p)($suffix)" })
+    let programs = ([ninfer-serve ninfer-calibrate] | each {|p| $tree | path join apps $p })
     let old = ($picked | each {|f| {file: $f, sha: (open --raw $f | hash sha256)} })
     rm -f ...$picked ...$programs
 

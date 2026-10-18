@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 // Ported from V-Sekai-fire/service-language-model tray/src/install-portable.cpp at 2365a9d0.
-// One release carries both platforms over one shared chunk store: Windows restores
-// payload.caidx with desync.exe, Linux restores payload-linux.caidx with desync.
+// Restores payload-linux.caidx with desync from the release's shared chunk store volumes.
 
 #include <algorithm>
 #include <array>
@@ -17,190 +16,21 @@
 #include <string>
 #include <vector>
 
-#ifdef _WIN32
-#include <windows.h>
-#include <winhttp.h>
-#else
 #include <cerrno>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
 extern char** environ;
-#endif
 
 namespace fs = std::filesystem;
 namespace
 {
-#ifdef _WIN32
-const std::string IndexName = "payload.caidx";
-const std::string DesyncName = "desync.exe";
-#else
 const std::string IndexName = "payload-linux.caidx";
 const std::string DesyncName = "desync";
-#endif
 constexpr char Magic[8] = {'D', 'S', 'B', 'L', 'O', 'B', '1', '\n'};
 constexpr uint64_t MaxAssetBytes = 1900000000;
 constexpr size_t MaxAssetCount = 1000;
 
-#ifdef _WIN32
-using InternetHandle = std::unique_ptr<void, decltype(&WinHttpCloseHandle)>;
-
-std::wstring widen(const std::string& value)
-{
-    const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.c_str(),
-                                         static_cast<int>(value.size()), nullptr, 0);
-    if (size <= 0)
-        return {};
-    std::wstring result(static_cast<size_t>(size), L'\0');
-    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.c_str(),
-                            static_cast<int>(value.size()), result.data(), size) != size)
-        return {};
-    return result;
-}
-
-InternetHandle openRequest(HINTERNET session, const std::wstring& url)
-{
-    URL_COMPONENTS parts{};
-    parts.dwStructSize = sizeof(parts);
-    parts.dwSchemeLength = static_cast<DWORD>(-1);
-    parts.dwHostNameLength = static_cast<DWORD>(-1);
-    parts.dwUrlPathLength = static_cast<DWORD>(-1);
-    parts.dwExtraInfoLength = static_cast<DWORD>(-1);
-    if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts))
-        return {nullptr, WinHttpCloseHandle};
-
-    const std::wstring host(parts.lpszHostName, parts.dwHostNameLength);
-    std::wstring path(parts.lpszUrlPath, parts.dwUrlPathLength);
-    path.append(parts.lpszExtraInfo, parts.dwExtraInfoLength);
-    InternetHandle connection{WinHttpConnect(session, host.c_str(), parts.nPort, 0), WinHttpCloseHandle};
-    if (!connection)
-        return {nullptr, WinHttpCloseHandle};
-    return {WinHttpOpenRequest(connection.get(), L"GET", path.c_str(), nullptr, WINHTTP_NO_REFERER,
-                               WINHTTP_DEFAULT_ACCEPT_TYPES,
-                               parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0),
-            WinHttpCloseHandle};
-}
-
-bool getText(const std::string& url, std::string& body)
-{
-    const std::wstring wideUrl = widen(url);
-    if (wideUrl.empty())
-        return false;
-    InternetHandle session{WinHttpOpen(L"ServiceLanguageModelInstaller/1.0",
-                                       WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
-                                       WINHTTP_NO_PROXY_BYPASS, 0),
-                           WinHttpCloseHandle};
-    if (!session)
-        return false;
-    InternetHandle request = openRequest(session.get(), wideUrl);
-    if (!request || !WinHttpSendRequest(request.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                                        WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-        !WinHttpReceiveResponse(request.get(), nullptr))
-        return false;
-
-    DWORD status = 0;
-    DWORD statusSize = sizeof(status);
-    if (!WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                             WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize, WINHTTP_NO_HEADER_INDEX) ||
-        status != HTTP_STATUS_OK)
-        return false;
-
-    std::array<char, 1 << 16> buffer{};
-    while (true)
-    {
-        DWORD available = 0;
-        if (!WinHttpQueryDataAvailable(request.get(), &available))
-            return false;
-        if (available == 0)
-            break;
-        DWORD received = 0;
-        if (!WinHttpReadData(request.get(), buffer.data(),
-                             static_cast<DWORD>(std::min<size_t>(buffer.size(), available)), &received) ||
-            received == 0)
-            return false;
-        body.append(buffer.data(), received);
-        if (body.size() > 16 * 1024 * 1024)
-            return false;
-    }
-    return true;
-}
-
-bool downloadFile(const std::string& url, const fs::path& destination)
-{
-    const std::wstring wideUrl = widen(url);
-    if (wideUrl.empty())
-        return false;
-    InternetHandle session{WinHttpOpen(L"ServiceLanguageModelInstaller/1.0",
-                                       WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
-                                       WINHTTP_NO_PROXY_BYPASS, 0),
-                           WinHttpCloseHandle};
-    if (!session)
-        return false;
-    InternetHandle request = openRequest(session.get(), wideUrl);
-    if (!request || !WinHttpSendRequest(request.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                                        WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-        !WinHttpReceiveResponse(request.get(), nullptr))
-        return false;
-
-    DWORD status = 0;
-    DWORD statusSize = sizeof(status);
-    if (!WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                             WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize, WINHTTP_NO_HEADER_INDEX) ||
-        status != HTTP_STATUS_OK)
-        return false;
-
-    fs::path partial = destination;
-    partial += L".part";
-    std::ofstream output(partial, std::ios::binary | std::ios::trunc);
-    if (!output)
-        return false;
-
-    std::array<char, 1 << 16> buffer{};
-    uint64_t total = 0;
-    bool success = true;
-    while (true)
-    {
-        DWORD available = 0;
-        if (!WinHttpQueryDataAvailable(request.get(), &available))
-        {
-            success = false;
-            break;
-        }
-        if (available == 0)
-            break;
-        DWORD received = 0;
-        if (!WinHttpReadData(request.get(), buffer.data(),
-                             static_cast<DWORD>(std::min<size_t>(buffer.size(), available)), &received) ||
-            received == 0)
-        {
-            success = false;
-            break;
-        }
-        total += received;
-        if (total > MaxAssetBytes)
-        {
-            success = false;
-            break;
-        }
-        output.write(buffer.data(), received);
-        if (!output)
-        {
-            success = false;
-            break;
-        }
-    }
-    output.close();
-    success = success && output.good();
-    std::error_code ec;
-    if (!success)
-    {
-        fs::remove(partial, ec);
-        return false;
-    }
-    fs::rename(partial, destination, ec);
-    return !ec;
-}
-#else
 bool getText(const std::string& url, std::string& body)
 {
     int pipefd[2];
@@ -292,48 +122,9 @@ bool downloadFile(const std::string& url, const fs::path& destination)
     std::error_code ec;
     return fs::is_regular_file(destination, ec) && !ec && fs::file_size(destination, ec) <= MaxAssetBytes && !ec;
 }
-#endif
 
 bool runDesync(const fs::path& executable, const std::vector<std::string>& arguments)
 {
-#ifdef _WIN32
-    auto quote = [](const std::wstring& value) {
-        std::wstring result = L"\"";
-        size_t slashes = 0;
-        for (wchar_t c : value)
-        {
-            if (c == L'\\')
-            {
-                ++slashes;
-                continue;
-            }
-            if (c == L'"')
-                result.append(slashes * 2 + 1, L'\\');
-            else
-                result.append(slashes, L'\\');
-            result.push_back(c);
-            slashes = 0;
-        }
-        result.append(slashes * 2, L'\\');
-        result.push_back(L'"');
-        return result;
-    };
-    std::wstring command = quote(executable.wstring());
-    for (const auto& argument : arguments)
-        command += L" " + quote(widen(argument));
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    PROCESS_INFORMATION process{};
-    if (!CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
-                        nullptr, nullptr, &startup, &process))
-        return false;
-    CloseHandle(process.hThread);
-    const DWORD wait = WaitForSingleObject(process.hProcess, INFINITE);
-    DWORD exitCode = 1;
-    const bool success = wait == WAIT_OBJECT_0 && GetExitCodeProcess(process.hProcess, &exitCode) && exitCode == 0;
-    CloseHandle(process.hProcess);
-    return success;
-#else
     const std::string executableName = executable.string();
     std::vector<char*> argv;
     argv.reserve(arguments.size() + 2);
@@ -349,7 +140,6 @@ bool runDesync(const fs::path& executable, const std::vector<std::string>& argum
         if (errno != EINTR)
             return false;
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
-#endif
 }
 
 bool validChunkPath(const std::string& name)
@@ -497,14 +287,12 @@ bool downloadRelease(const std::string& repository, const std::string& tag, cons
             return false;
         }
     }
-#ifndef _WIN32
     std::error_code ec;
     fs::permissions(assets / desyncName, fs::perms::owner_exec | fs::perms::group_exec |
                                               fs::perms::others_exec,
                     fs::perm_options::add, ec);
     if (ec)
         return false;
-#endif
     std::vector<fs::path> volumes;
     return fs::is_regular_file(assets / IndexName) &&
            fs::is_regular_file(assets / desyncName) && validateVolumes(assets, volumes);
@@ -524,11 +312,7 @@ int install(const fs::path& assets, const fs::path& target)
 
     std::error_code ec;
     const auto stamp = std::chrono::high_resolution_clock::now().time_since_epoch().count();
-#ifdef _WIN32
-    const auto processId = GetCurrentProcessId();
-#else
     const auto processId = getpid();
-#endif
     const fs::path store = fs::temp_directory_path() /
                            ("ninfer-all-" + std::to_string(processId) + "-" +
                             std::to_string(stamp));
@@ -570,14 +354,12 @@ int install(const fs::path& assets, const fs::path& target)
         success = false;
     }
     fs::remove_all(store, ec);
-#ifndef _WIN32
-    // The index is written on Windows, so restore the execute bits of the shipped programs.
+    // The payload is a tar index, so restore the execute bits of the shipped programs.
     if (success)
         for (const auto& entry : fs::directory_iterator(target / "bin", ec))
             if (entry.is_regular_file())
                 fs::permissions(entry.path(), fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
                                 fs::perm_options::add, ec);
-#endif
     if (success)
         std::cout << "Installation complete: " << target << '\n';
     return success ? 0 : 1;

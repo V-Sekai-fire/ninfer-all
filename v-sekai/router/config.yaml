@@ -1,7 +1,7 @@
 # One OpenAI-compatible port (127.0.0.1:18000) for every Bonsai 2 Heretic server.
 # Backends are the Mac ends of the mTLS tunnels (com.chibifire.ninfer-tunnel).
-# "bonsai" spreads over whichever servers are up: the tower dual-boots, so only the
-# desk pair or the Fedora pair answers at a time; a dead backend is cooled down and skipped.
+# "bonsai" spreads over whichever servers are up. desk-* are the tower's WSL2 Fedora servers,
+# fedora-* its native Fedora boot; only one pair answers at a time, and a dead backend is skipped.
 model_list:
   - model_name: bonsai
     litellm_params: {model: openai/bonsai-27b, api_base: http://127.0.0.1:18091/v1, api_key: os.environ/BONSAI_DESK_API_KEY}
