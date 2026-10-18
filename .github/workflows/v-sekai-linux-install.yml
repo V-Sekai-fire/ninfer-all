@@ -2,8 +2,9 @@ name: V-Sekai Linux install check
 
 # Installs a published release online with ninfer-install, as a Linux user would, and checks
 # every restored file against payload-linux.sha256 and every shipped library against ldd.
-# It needs no GPU and no build: the binaries are built and GPU-tested in WSL2 on the RTX 4090
-# host (v-sekai/build.nu), and this job proves the published assets reassemble on a clean host.
+# It needs no GPU and no build: the binaries are built and GPU-tested on the RTX 4090 host under
+# Fedora 44, native or WSL2 (v-sekai/build.nu), and this job proves the published assets
+# reassemble on a clean host.
 
 on:
   workflow_dispatch:

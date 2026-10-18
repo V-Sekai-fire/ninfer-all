@@ -1,39 +1,35 @@
 # V-Sekai release line
 
-This directory adds a Windows and Linux release of ninfer-all for one RTX 4090 (sm_89).
-The release serves one model: Ternary Bonsai 2 27B Uncensored Heretic v2. Everything else in the
-repository is upstream [iamwavecut/ninfer-all](https://github.com/iamwavecut/ninfer-all).
+This directory adds a Linux release of ninfer-all for one RTX 4090 (sm_89). Linux means
+Fedora 44, native or in WSL2; the Windows NVIDIA driver passes through to WSL2. The release
+serves one model: Ternary Bonsai 2 27B Uncensored Heretic v2. Everything else in the repository
+is upstream [iamwavecut/ninfer-all](https://github.com/iamwavecut/ninfer-all).
 
 The release format copies the desync pattern of
 [V-Sekai-fire/service-language-model](https://github.com/V-Sekai-fire/service-language-model).
-`payload-pack.exe` packs the zstd chunks of one desync chunk store, unchanged, into
-`payload-data-NNN.bin` volumes below the GitHub asset limit. Both platforms share the store,
-so the model's chunks are stored once. `payload.caidx` indexes the Windows payload, and
-`setup.exe` installs it online from its pinned tag or offline from the assets beside it.
-`payload-linux.caidx` indexes the Linux payload, and `ninfer-install` installs it the same way.
+`payload-pack` packs the zstd chunks of one desync chunk store, unchanged, into
+`payload-data-NNN.bin` volumes below the GitHub asset limit. `payload-linux.caidx` indexes the
+payload, and `ninfer-install` installs it online from a tag or offline from the assets beside it.
 
 ## Steps
 
 Every script is nushell and runs inside the pixi environment, from the repository root.
-Pixi supplies CUDA 13, CMake, Ninja, FFmpeg (LGPL build), libcurl, Go, Python and nushell,
-and on Linux GCC 14 with a glibc 2.28 sysroot. The Windows host needs Visual Studio 2022
-with the C++ tools.
+Pixi supplies CUDA 13, CMake, Ninja, FFmpeg (LGPL build), libcurl, Go, Python, nushell, and
+GCC 14 with a glibc 2.28 sysroot.
 
-Steps 1 and 2 use the default environment, which runs on Windows, Linux and macOS (Apple
-silicon). The converter is pure Python on the CPU, so any of them can make the artifact.
-Steps 3 and 4 use the `build` environment, which exists only on Windows and Linux, because the
-engine needs CUDA.
+Steps 1 and 2 use the default environment, which runs on Linux and macOS (Apple silicon). The
+converter is pure Python on the CPU, so either can make the artifact. Steps 3 and 4 use the
+`build` environment, which exists only on Linux, because the engine needs CUDA.
 
 1. `pixi run --locked nu v-sekai/fetch-sources.nu` downloads the conversion sources into `sources/`.
 2. `pixi run --locked nu v-sekai/convert.nu` writes `models/bonsai2-27b-heretic.ninfer`.
-3. `pixi run --locked -e build nu v-sekai/build.nu` builds `ninfer-serve` and `ninfer-calibrate` and
-   stages them with their library closure in `dist/<os>/`. Run it once on Windows and once
-   on Linux. WSL2 on the RTX 4090 host is enough: it passes the Windows NVIDIA driver through,
-   so the same host builds and GPU-tests both platforms. Copy the Linux `dist/linux` and
-   `dist/tools-linux` into the Windows checkout's `dist/`.
-4. `pixi run --locked -e build nu v-sekai/release.nu --tag v0.12.0-dev.N`, on Windows with both
-   `dist` trees present, stages both payloads, restores each one, compares every file by
-   SHA-256, and publishes a prerelease.
+3. `pixi run --locked -e build nu v-sekai/build.nu` builds `ninfer-serve`, `ninfer-calibrate`
+   and `ninfer-install` on Fedora 44 (native or WSL2), and stages the programs with their
+   library closure in `dist/linux/` and the installer in `dist/tools-linux/`. `--arch` picks the
+   CUDA arch (default 89); an sm_86 build also runs on the 4090.
+4. `pixi run --locked -e build nu v-sekai/release.nu --tag v0.12.0-dev.N`, on the same Linux
+   host, stages the payload, restores it, compares every file by SHA-256, and publishes a
+   prerelease (`--skip-publish` stops before that).
 5. Run the `V-Sekai Linux install check` workflow with the tag. It installs the release
    online with `ninfer-install` on a clean runner and checks every file against
    `payload-linux.sha256`. It needs no GPU.
@@ -46,41 +42,29 @@ engine needs CUDA.
 - DFlash2 adapter: [ProCreations/Ternary-Bonsai-2-27B-DFlash2](https://huggingface.co/ProCreations/Ternary-Bonsai-2-27B-DFlash2).
 - Recipe: `bonsai2_27b_ternary`, as [docs/weight-conversion.md](../docs/weight-conversion.md#ternary-bonsai-2-27b) describes it.
 
-## Windows MSI with the NInfer service
-
-The `V-Sekai MSI release` workflow (`.github/workflows/v-sekai-msi-release.yml`) makes a whole
-Windows release from one manual run. Its input is a tag such as `v0.12.0-dev.1`.
-
-1. `convert` runs on an Ubuntu runner. It fetches the sources and converts the model on the CPU
-   with `convert.nu --max-file-bytes 1800000000`. The artifact is an entry file plus
-   `.part-NNNN` files, each below 2 GB, which NInfer reads as one artifact.
-2. `build` runs `build.nu` on a Windows runner and builds `ninfer-serve` for sm_89.
-3. `package` runs `msi.nu`. It builds the service host `ninfer-service.exe` (in
-   `installer/src/service.cpp`) and stages the build, the app-local MSVC runtime, the model parts,
-   the notices and `msi/ninfer-serve.args`. WiX 5 then builds `msi/ninfer.wxs` into one MSI with
-   external CABs, one CAB per model part. The job installs the MSI, compares every installed file
-   with `payload-msi.sha256`, and checks that the NInfer service is running and started
-   `ninfer-serve`. It then uninstalls the MSI and publishes the release. Tags with `-dev`,
-   `-beta` or `-rc` are published as prereleases. `reuse_run` packages the artifacts of an
-   earlier run and skips steps 1 and 2.
-
-The runners have no GPU, so the workflow does not run the model.
-
-To install, download the `.msi` and every `ninfer*.cab` into one folder and run the MSI. It
-installs into `C:\Program Files\V-Sekai\NInfer` and registers the automatic-start `NInfer`
-service. The service serves `http://127.0.0.1:8080/v1`. The host needs only an NVIDIA driver of
-the CUDA 13 branch. The flags are in `C:\ProgramData\V-Sekai\NInfer\ninfer-serve.args`, one
-option per line, and upgrades and uninstalls keep the file. The log is
-`C:\ProgramData\V-Sekai\NInfer\logs\ninfer-serve.log`. When `ninfer-serve` exits with an
-error, the service starts it again after 10 s, then 30 s, then every 60 s. Run
-`bin\ninfer-service.exe --console` to run the same command in the foreground.
-
 ## Serving
 
-After installation, run `nu serve.nu` in the install directory
-(`C:\ProgramData\V-Sekai\NInfer` by default on Windows, the `--target` folder on Linux).
-`nu serve.nu --help` lists the options. A Linux host needs an NVIDIA driver of the CUDA 13
-branch and glibc 2.28 or newer.
+Install with `chmod +x ninfer-install`, then
+`./ninfer-install --online --tag v0.12.0-dev.N --target ~/ninfer`, or `--from <folder>` with
+`desync`, `payload-linux.caidx` and every payload-data volume. Then run `nu serve.nu` in the
+install directory. `nu serve.nu --help` lists the options. The host needs an NVIDIA driver of
+the CUDA 13 branch and glibc 2.28 or newer.
+
+## One port on the Mac
+
+`router/` is a LiteLLM proxy on the Mac at `127.0.0.1:18000` that fronts every Bonsai server.
+Hermes uses it as the provider `bonsai`.
+
+    nu v-sekai/router/router.nu install   # then load the LaunchAgent from a terminal
+    nu v-sekai/router/router.nu check
+
+The model `bonsai` sends each request to the least busy server that answers. `desk-4090` and
+`desk-3090` are the tower's Fedora servers in WSL2; `fedora-4090` and `fedora-3090` are the same
+cards when the tower boots native Fedora. Only one pair is up at a time, and the router skips a
+server that is down for 60 s. `bonsai-desk-4090`, `bonsai-desk-3090`, `bonsai-fedora-4090` and
+`bonsai-fedora-3090` each select one card. Backends and keys are in `router/config.yaml`.
+`vision_zero_shot_probe.py` checks a server's vision with a known image (red circle, blue
+square, "42").
 
 ## macOS (Apple silicon)
 

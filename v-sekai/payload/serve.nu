@@ -1,4 +1,4 @@
-# Serve Ternary Bonsai 2 27B Uncensored Heretic v2 with ninfer-all on one RTX 4090, on Windows or Linux.
+# Serve Ternary Bonsai 2 27B Uncensored Heretic v2 with ninfer-all on one RTX 4090 on Linux.
 # Run from the install directory: nu serve.nu
 # Speculation: DFlash2 with six drafts, the fastest single-stream decode measured on an RTX 4090 at 275 W.
 # Routes: the first start calibrates this GPU and saves device-profile-<device>.json beside this
@@ -15,10 +15,9 @@ def main [
 ] {
     let root = $env.FILE_PWD
     $env.CUDA_VISIBLE_DEVICES = ($device | into string)
-    let exe = if $nu.os-info.name == windows { 'ninfer-serve.exe' } else { 'ninfer-serve' }
     let profile = ($root | path join $"device-profile-($device).json")
     let routes = if ($profile | path exists) { 'auto' } else { 'calibrate' }
-    (^($root | path join bin $exe) ($root | path join models bonsai2-27b-heretic.ninfer)
+    (^($root | path join bin ninfer-serve) ($root | path join models bonsai2-27b-heretic.ninfer)
         --host $host --port $port
         --model-id bonsai2-27b-heretic
         --max-context $max_context --kv-capacity auto --kv-dtype $kv_dtype

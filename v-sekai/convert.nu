@@ -8,7 +8,7 @@ def main [
     --sources: path = "sources"
     --out: path = "models/bonsai2-27b-heretic.ninfer"
     --device: string = "cpu"
-    --max-file-bytes: int    # split into an entry and .part-NNNN files of at most this many bytes (the MSI needs < 2 GB)
+    --max-file-bytes: int    # split into an entry and .part-NNNN files of at most this many bytes (for example, to keep each file below a 2 GB limit)
 ] {
     let root = ($env.FILE_PWD | path dirname)
     cd $root

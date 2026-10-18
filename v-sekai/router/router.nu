@@ -1,8 +1,8 @@
 # One OpenAI-compatible port on the Mac for every Bonsai 2 Heretic server (LiteLLM proxy).
-#   nu v-sekai/desk/router/router.nu install   copy to ~/.local/share/model-router, pixi install
+#   nu v-sekai/router/router.nu install   copy to ~/.local/share/model-router, pixi install
 #                                              --locked, write the LaunchAgent, set the Hermes provider
-#   nu v-sekai/desk/router/router.nu run       what the LaunchAgent runs (127.0.0.1:18000)
-#   nu v-sekai/desk/router/router.nu check     witnesses: no key 401, models list, one chat
+#   nu v-sekai/router/router.nu run       what the LaunchAgent runs (127.0.0.1:18000)
+#   nu v-sekai/router/router.nu check     witnesses: no key 401, models list, one chat
 # Backends and model names are in config.yaml. The router reads only the keys it needs from
 # ~/.hermes/.env and creates MODEL_ROUTER_API_KEY there on first install.
 

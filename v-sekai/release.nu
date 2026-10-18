@@ -1,22 +1,13 @@
-# Build and publish a dev.* Windows and Linux release of ninfer-all with Bonsai 2 Heretic v2.
-# Run on Windows from the fork root, after build.nu on both platforms and convert.nu:
+# Build and publish a dev.* Linux release of ninfer-all with Bonsai 2 Heretic v2.
+# Run on Linux (Fedora 44, native or WSL2) from the fork root, after build.nu and convert.nu:
 #   pixi run --locked -e build nu v-sekai/release.nu --tag v0.12.0-dev.1
-# dist/windows comes from build.nu on this host. dist/linux and dist/tools-linux come from
-# build.nu on Linux, for example in WSL2 on the same host, copied into this checkout's dist/.
 #
 # The release copies the desync pattern of V-Sekai-fire/service-language-model release.ps1:
 # a desync chunk store whose zstd chunks are packed, unchanged, into payload-data-NNN.bin
-# volumes below the GitHub asset limit. Both platforms share one store, so the model's
-# chunks are stored once. payload.caidx indexes the Windows payload for setup.exe and
-# desync.exe; payload-linux.caidx indexes the Linux payload for ninfer-install and desync.
-# Both payloads are restored and compared file by file by SHA-256 before anything is published.
-#
-# --linux-only makes the Linux half on a Linux host, with no Windows build: run it there after
-# build.nu and convert.nu. It adds ninfer-install, desync, payload-linux.caidx and the volumes to
-# the release the V-Sekai MSI release workflow already published under the same tag, or creates
-# the release when there is none.
-
-use msvc.nu load-msvc
+# volumes below the GitHub asset limit. payload-linux.caidx indexes the payload for
+# ninfer-install and desync. The payload is restored and compared file by file by SHA-256
+# before anything is published. The release is uploaded into an existing release of the same
+# tag, or created when there is none.
 
 const volume_limit = 1900000000
 const desync_repo = "https://github.com/V-Sekai-fire/multiplayer-fabric-desync.git"
@@ -34,7 +25,7 @@ def sha-tree [dir: path] {
     | sort-by path
 }
 
-# One payload: the platform's dist tree, the artifact, the launcher, notices and VERSION.
+# The payload: the dist tree, the artifact, the launcher, notices and VERSION.
 def stage-payload [stage: path, dist: path, artifact: path, tag: string] {
     mkdir $stage
     cp -r ($dist | path join "*" | into glob) $stage
@@ -63,7 +54,6 @@ def main [
     --tag: string = "v0.12.0-dev.1"
     --artifact: path = "models/bonsai2-27b-heretic.ninfer"
     --skip-publish
-    --linux-only  # make and publish only the Linux payload, on a Linux host
 ] {
     if not ($tag =~ '^(v[0-9]+\.[0-9]+\.[0-9]+-)?dev\.[A-Za-z0-9.-]+$') {
         error make {msg: $"Release tag must be dev.<version> or vX.Y.Z-dev.<n>: ($tag)"}
@@ -74,71 +64,51 @@ def main [
     if ($release_dir | path exists) {
         error make {msg: $"Release workspace already exists: ($release_dir). Move it aside first."}
     }
-    let inputs = if $linux_only { [dist/linux/bin/ninfer-serve dist/tools-linux/ninfer-install $artifact] } else { [dist/windows/bin/ninfer-serve.exe dist/linux/bin/ninfer-serve dist/tools-linux/ninfer-install $artifact] }
-    for required in $inputs {
-        if not ($required | path exists) { error make {msg: $"Missing input: ($required). Run build.nu on both platforms and convert.nu."} }
+    if $nu.os-info.name != linux { error make {msg: "release.nu runs only on Linux (Fedora 44, native or WSL2)."} }
+    for required in [dist/linux/bin/ninfer-serve dist/tools-linux/ninfer-install $artifact] {
+        if not ($required | path exists) { error make {msg: $"Missing input: ($required). Run build.nu and convert.nu."} }
     }
 
     let store = ($release_dir | path join desync-store)
     let assets = ($release_dir | path join assets)
     let tools = ($release_dir | path join tools)
     let desync_source = ($release_dir | path join desync-source)
-    let desync_linux = ($tools | path join desync)
-    # The desync this host runs to index, verify and restore.
-    let desync = if $linux_only { $desync_linux } else { $tools | path join desync.exe }
+    let desync = ($tools | path join desync)
     let installer_build = ($release_dir | path join installer-build)
     for d in [$store $assets $tools] { mkdir $d }
 
-    if not $linux_only { load-msvc }
-
-    # setup.exe with the tag pinned into it (Windows), and the volume packer.
-    ^cmake -S v-sekai/installer -B $installer_build -G Ninja -DCMAKE_BUILD_TYPE=Release $"-DNI_RELEASE_TAG=($tag)"
+    # The volume packer.
+    ^cmake -S v-sekai/installer -B $installer_build -G Ninja -DCMAKE_BUILD_TYPE=Release
     check "Configuring the installer"
     ^cmake --build $installer_build
     check "Building the installer"
 
-    # The pinned V-Sekai desync, as service-language-model builds it, for both platforms.
+    # The pinned V-Sekai desync, as service-language-model builds it.
     ^git clone --filter=blob:none --no-checkout $desync_repo $desync_source
     check "Cloning the pinned V-Sekai desync source"
     ^git -C $desync_source checkout --detach $desync_rev
     check "Checking out the pinned V-Sekai desync revision"
-    if not $linux_only {
-        ^go build -C $desync_source -o $desync ./cmd/desync
-        check "Building desync.exe"
-    }
     with-env {GOOS: linux, GOARCH: amd64, CGO_ENABLED: "0"} {
-        ^go build -C $desync_source -o $desync_linux ./cmd/desync
+        ^go build -C $desync_source -o $desync ./cmd/desync
     }
-    check "Building the Linux desync"
+    check "Building desync"
 
-    let payloads = [
-        [os dist index];
-        [windows dist/windows payload.caidx]
-        [linux dist/linux payload-linux.caidx]
-    ] | where {|p| not $linux_only or $p.os == 'linux' }
-    for p in $payloads {
-        let stage = ($release_dir | path join $"payload-($p.os)")
-        stage-payload $stage $p.dist $artifact $tag
-        ^$desync tar --index --store $store ($release_dir | path join $p.index) $stage
-        check $"Indexing the ($p.os) payload"
-    }
+    let stage = ($release_dir | path join payload-linux)
+    let index = ($release_dir | path join payload-linux.caidx)
+    stage-payload $stage dist/linux $artifact $tag
+    ^$desync tar --index --store $store $index $stage
+    check "Indexing the payload"
     ^$desync verify --store $store
     check "Desync chunk-store verification"
-    let pack = if $linux_only { 'payload-pack' } else { 'payload-pack.exe' }
-    ^($installer_build | path join $pack) $store $assets
+    ^($installer_build | path join payload-pack) $store $assets
     check "Writing raw desync blob volumes"
 
-    if not $linux_only {
-        cp ($installer_build | path join ninfer-setup.exe) ($assets | path join setup.exe)
-        cp $desync $assets
-    }
-    cp $desync_linux $assets
+    cp $desync $assets
     cp dist/tools-linux/ninfer-install $assets
-    for p in $payloads { cp ($release_dir | path join $p.index) $assets }
+    cp $index $assets
 
     let names = (ls $assets | get name | path basename)
-    let expected = if $linux_only { [desync ninfer-install payload-linux.caidx] } else { [setup.exe desync.exe payload.caidx desync ninfer-install payload-linux.caidx] }
-    for required in $expected {
+    for required in [desync ninfer-install payload-linux.caidx] {
         if $required not-in $names { error make {msg: $"Required release asset is missing: ($required)"} }
     }
     let volumes = ($names | where {|n| $n =~ '^payload-data-[0-9]{3}\.bin$' } | sort)
@@ -149,64 +119,44 @@ def main [
         }
     }
 
-    # Windows: restore through setup.exe exactly as a user would, offline.
-    let restore_windows = ($release_dir | path join restore-windows)
-    if not $linux_only {
-        let setup = (run-external ($assets | path join setup.exe) '--from' $assets '--target' $restore_windows '--quiet' | complete)
-        if $setup.exit_code != 0 { error make {msg: $"Offline restore through setup.exe failed (exit ($setup.exit_code))."} }
-    }
-    # Linux: ninfer-install runs the same volume unpack and desync untar; replay it here with
-    # this host's desync against payload-linux.caidx. The V-Sekai Linux install check workflow runs
-    # ninfer-install online against the published release.
-    let restore_linux = ($release_dir | path join restore-linux)
-    ^$desync untar --index --store $store ($assets | path join payload-linux.caidx) $restore_linux
-    check "Restoring the Linux payload"
-    let checks = [[stage restore]; [payload-windows $restore_windows] [payload-linux $restore_linux]] | where {|c| not $linux_only or $c.stage == 'payload-linux' }
-    for p in $checks {
-        let expected = (sha-tree ($release_dir | path join $p.stage))
-        let actual = (sha-tree $p.restore)
-        if $expected != $actual { error make {msg: $"($p.stage): restored paths or SHA-256 hashes differ from the staged payload."} }
-        print $"Restore check ($p.stage): ($expected | length) files match by SHA-256."
-    }
-    # The Linux manifest lets CI prove an online ninfer-install against the published release.
-    sha-tree ($release_dir | path join payload-linux) | each {|r| $"($r.sha256)  ($r.path)" } | str join "\n" | save -f ($assets | path join payload-linux.sha256)
+    # ninfer-install runs the same volume unpack and desync untar; replay it here against
+    # payload-linux.caidx. The V-Sekai Linux install check workflow runs ninfer-install online
+    # against the published release.
+    let restore = ($release_dir | path join restore-linux)
+    ^$desync untar --index --store $store ($assets | path join payload-linux.caidx) $restore
+    check "Restoring the payload"
+    let expected = (sha-tree $stage)
+    let actual = (sha-tree $restore)
+    if $expected != $actual { error make {msg: "payload-linux: restored paths or SHA-256 hashes differ from the staged payload."} }
+    print $"Restore check payload-linux: ($expected | length) files match by SHA-256."
+    # The manifest lets CI prove an online ninfer-install against the published release.
+    sha-tree $stage | each {|r| $"($r.sha256)  ($r.path)" } | str join "\n" | save -f ($assets | path join payload-linux.sha256)
 
     let oversized = (ls $assets | where size >= ($volume_limit | into filesize))
     if ($oversized | is-not-empty) { error make {msg: $"Release assets must be below ($volume_limit) bytes: ($oversized.name)"} }
     if ((ls $assets | length) > 1000) { error make {msg: "A GitHub release cannot contain more than 1000 assets."} }
 
-    for temporary in [payload-windows payload-linux restore-windows restore-linux desync-store tools desync-source installer-build payload.caidx payload-linux.caidx] {
+    for temporary in [payload-linux restore-linux desync-store tools desync-source installer-build payload-linux.caidx] {
         rm -rf ($release_dir | path join $temporary)
     }
 
-    let notes = ([
-        "ninfer-all for one RTX 4090 (sm_89), Windows x64 and Linux x86-64, with Ternary Bonsai 2 27B Uncensored Heretic v2 as one v3 artifact: the t2_g128_fp16 ternary body, the Bonsai 2 MTP head and DFlash2 adapter, and the Qwen3.8-27B vision tower."
+    ([
+        "ninfer-all for one RTX 4090 (sm_89) on Linux x86-64 (Fedora 44, native or WSL2), with Ternary Bonsai 2 27B Uncensored Heretic v2 as one v3 artifact: the t2_g128_fp16 ternary body, the Bonsai 2 MTP head and DFlash2 adapter, and the Qwen3.8-27B vision tower."
         ""
-        "Windows: run setup.exe with an Internet connection to download this exact release, or download every asset beside setup.exe for a fully offline installation. It restores payload.caidx into C:\\ProgramData\\V-Sekai\\NInfer."
-        ""
-        $"Linux: chmod +x ninfer-install, then `./ninfer-install --online --tag ($tag) --target ~/ninfer`, or `--from <folder>` with desync, payload-linux.caidx and every payload-data volume. The host needs an NVIDIA driver of the CUDA 13 branch and glibc 2.28 or newer."
-        ""
-        "Both platforms share the payload-data volumes, which contain unchanged desync zstd chunks. Start the server from the install directory with `nu serve.nu`."
-    ] | str join "\n")
-    $notes | save -f ($release_dir | path join notes.md)
+        $"chmod +x ninfer-install, then `./ninfer-install --online --tag ($tag) --target ~/ninfer`, or `--from <folder>` with desync, payload-linux.caidx and every payload-data volume. The host needs an NVIDIA driver of the CUDA 13 branch and glibc 2.28 or newer. Start the server from the install directory with `nu serve.nu`."
+    ] | str join "\n") | save -f ($release_dir | path join notes.md)
 
-    if $linux_only {
-        ([
-            "Linux x86-64 (built on a Linux RTX 4090 host):"
-            $"chmod +x ninfer-install, then `./ninfer-install --online --tag ($tag) --target ~/ninfer`, or `--from <folder>` with desync, payload-linux.caidx and every payload-data volume. The host needs an NVIDIA driver of the CUDA 13 branch and glibc 2.28 or newer. Start the server from the install directory with `nu serve.nu`."
-        ] | str join "\n") | save -f ($release_dir | path join notes.md)
-    }
     if not $skip_publish {
         let files = (ls $assets | get name)
         let exists = ((do { ^gh release view $tag --repo $repo --json tagName } | complete).exit_code == 0)
-        if $linux_only and $exists {
+        if $exists {
             ^gh release upload $tag ...$files --repo $repo
-            check $"Uploading the Linux assets to ($tag)"
+            check $"Uploading the assets to ($tag)"
             let body = (^gh release view $tag --repo $repo --json body --jq .body)
             let notes = ($release_dir | path join notes-combined.md)
             $"($body)\n\n(open --raw ($release_dir | path join notes.md))\n" | save -f $notes
             ^gh release edit $tag --repo $repo --notes-file $notes
-            check $"Adding the Linux notes to ($tag)"
+            check $"Adding the notes to ($tag)"
         } else {
             ^gh release create $tag ...$files --repo $repo --prerelease --title $tag --notes-file ($release_dir | path join notes.md)
             check $"Publishing GitHub release ($tag)"
