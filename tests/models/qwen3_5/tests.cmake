@@ -224,3 +224,9 @@ set_tests_properties(ninfer_qwen3_5_structured_round_test PROPERTIES SKIP_RETURN
 ninfer_add_op_test(ninfer_chip_tower_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_chip_tower.cpp"
   LIBRARIES ninfer_ops)
+
+ninfer_add_test(ninfer_chip_runtime_test STANDALONE
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_chip_runtime.cpp"
+  LIBRARIES ninfer_engine ninfer_model_runtime ninfer_model_loading ninfer_artifact ninfer_core
+            ninfer_ops ninfer::json)
+set_tests_properties(ninfer_chip_runtime_test PROPERTIES SKIP_RETURN_CODE 77)
