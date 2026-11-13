@@ -147,11 +147,11 @@ def main(argv=None):
         action="append",
         default=[],
         metavar="NAME=PATH",
-        help="named source such as quantized, dflash, dflash2, or mtp (replaces the base MTP head)",
+        help="named source such as quantized, dflash, dflash2, chip, or mtp (replaces the base MTP head)",
     )
     parser.add_argument(
         "--components",
-        help="comma-separated text,vision,mtp,dflash,dflash2 (default text); for "
+        help="comma-separated text,vision,mtp,dflash,dflash2,chip (default text); for "
         "Qwen3.8-Flash-Next text,ngram (the default: the model with its n-gram table), text (the "
         "model alone, its table read from a table artifact at run time) or ngram (that table "
         "artifact), and vision or mtp (from --source mtp=MTP.gguf or an HF safetensors subset) beside text",
@@ -248,7 +248,7 @@ def main(argv=None):
         if len(components) != len(set(components)):
             raise ValueError("components must not repeat")
         companions = {
-            key: sources[key] for key in ("dflash", "dflash2") if key in components
+            key: sources[key] for key in ("dflash", "dflash2", "chip") if key in components
         }
         if "mtp" in components and "mtp" in paths:
             companions["mtp"] = sources["mtp"]

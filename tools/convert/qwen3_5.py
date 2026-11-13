@@ -1,6 +1,6 @@
 """Qwen3.5 architecture adapter: mathematical config, source axes, and packing groups.
 
-Dense/MoE text, Vision, MTP, DFlash, and DFlash2 share this explicit mapping.
+Dense/MoE text, Vision, MTP, DFlash, DFlash2, and the chip tower share this explicit mapping.
 Official checkpoint names and quantization assignments live in official_recipes.
 """
 
@@ -10,6 +10,7 @@ from math import isqrt
 from pathlib import Path
 from typing import Mapping
 
+from .chip import add_chip, chip_config
 from .config_fields import _f32, _fixed, _positive, _rope_source
 from .model import Model, Parameter
 from .resources import load_resources
@@ -304,6 +305,14 @@ class _Builder:
             return
         component = name.split("/", 1)[0]
         target = self.model.config
+        if component == "chip":
+            _check_source_fields(
+                name,
+                chip_config(selected.config, target),
+                self.model.components[component]["config"],
+                {"hidden_size", "vocab_size", "intermediate_size", "num_hidden_layers"},
+            )
+            return
         if component in ("text", "mtp"):
             expected = target
             if target.get("model_type") == "qwen4_exp_text":
@@ -887,6 +896,7 @@ def build_model(
         "mtp",
         "dflash",
         "dflash2",
+        "chip",
     }:
         raise ValueError("select text and supported optional components")
     companions = {} if companions is None else companions
@@ -908,6 +918,15 @@ def build_model(
                 "config": draft_config(companions[backend].config, config, backend),
                 "target": "text",
             }
+    if "chip" in selected:
+        if "chip" not in companions:
+            raise ValueError("selected chip requires its source")
+        if "num_experts" in config:
+            raise ValueError("the chip tower requires Dense text mathematics")
+        records["chip"] = {
+            "config": chip_config(companions["chip"].config, config),
+            "target": "text",
+        }
     refs, resources, count, special = load_resources(
         base.root,
         vocab_size=config["vocab_size"],
@@ -968,4 +987,6 @@ def build_model(
             builder.draft(
                 companions[backend], records[backend]["config"], config, backend
             )
+    if "chip" in selected:
+        add_chip(builder, companions["chip"], records["chip"]["config"])
     return model

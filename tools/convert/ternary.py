@@ -9,7 +9,8 @@ the sign vector of their input width, so the recipe stores them without rounding
 is stored the same way, inverse-rotated; the runtime restores each gathered row with the
 hidden-width signs. MTP, Vision, the frontend resources and the DFlash2 adapter come from the
 companions given to `--model` and `--source dflash2`, which share the geometry; `--source mtp`
-replaces the checkpoint's MTP head.
+replaces the checkpoint's MTP head. `--source chip` adds the chip tower (see chip.py) beside the
+text tower, whose objects it leaves unchanged.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from typing import Callable
 import numpy as np
 import torch
 
+from .chip import assign_chip
 from .methods import AuxiliaryValue, cast_direct, grouped_absmax, import_encoded
 from .official_recipes import Q4, _optional
 from .sources.gguf import GGUFFile
@@ -405,6 +407,8 @@ def bonsai2_27b_ternary(model, recipe, sources):
     for name in model.parameters:
         if name.startswith("dflash2/") and name.endswith(DFLASH2_Q4_PROJECTIONS):
             recipe.assign(name, format=Q4, method=grouped_absmax)
+    if "chip" in model.components:
+        assign_chip(model, recipe)
     encoded, direct = text_sources(gguf)
     for name, source in encoded.items():
         recipe.assign(name, format=T2, method=import_encoded, source=source)
