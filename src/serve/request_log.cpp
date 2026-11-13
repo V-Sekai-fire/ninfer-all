@@ -794,6 +794,7 @@ std::string format_server_start_json(
         {"embedding_q6", engine_options.embedding_q6},
         {"mtp_experts_q4", engine_options.mtp_experts_q4},
         {"gdn_state_fp16", engine_options.gdn_state_fp16},
+        {"chip_firmware", engine_options.chip_firmware},
         {"rope_yarn", engine_options.rope_yarn},
         {"rope_yarn_factor", engine_options.rope_yarn_factor},
         {"rope_scaling_factor", engine_options.rope_scaling_factor},

@@ -54,6 +54,19 @@ int main() {
         try { (void)parse(full); } catch (const std::invalid_argument&) { rejected = true; }
         failures += check(rejected, "server accepted invalid draft confidence");
     }
+    failures += check(parse({"ninfer-serve", "model.ninfer"}).chip_firmware.empty(),
+                      "the chip tower must be opt-in");
+    failures += check(parse({"ninfer-serve", "model.ninfer", "--chip", "calc-bridge"})
+                              .chip_firmware == "calc-bridge",
+                      "server did not preserve the chip firmware name");
+    {
+        bool rejected = false;
+        try {
+            (void)parse({"ninfer-serve", "model.ninfer", "--chip", "calc-bridge",
+                         "--max-concurrency", "2"});
+        } catch (const std::invalid_argument&) { rejected = true; }
+        failures += check(rejected, "server accepted the chip tower with two lanes");
+    }
     failures += check(parse({"ninfer-serve", "model.ninfer", "--expert-residency", "host"})
                               .hybrid_experts.dma_share == 1.0F,
                       "server must default native host expert misses to GPU execution");
