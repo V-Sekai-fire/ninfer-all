@@ -119,3 +119,109 @@ only if the plain run is exact and both controls fail.
 
 `--dump POSITION DIR` writes every intermediate tensor of one position as raw files
 (`L<layer>.<name>.bin`), to compare with the reference when a run is not exact.
+
+## Loading
+
+`--chip NAME` (`EngineOptions::chip_firmware`, `LoadOptions::chip_firmware`) selects the tower and
+one firmware. Without it the `chip` component is not read, and the engine does what it did before.
+
+`parse_config` reads the component config into `ChipConfig` (`src/models/qwen3_5/config.h`). It
+refuses a tower whose Gated DeltaNet geometry or `rms_norm_eps` differs from the text model's, whose
+chip token ids do not follow the text vocabulary, whose `code_dims` do not name `nfam + npay`
+residual dims, or which does not hold firmware `NAME`.
+
+`bind_chip` (`src/models/qwen3_5/load/chip.cpp`) binds `chip/token_embedding`, every block under
+`chip/layers/N/` with the text block's bindings, and `chip/firmware/NAME/state`. The handles are
+`ModelWeights::chip`. All of it is device memory on the first device.
+
+## Runtime
+
+`chip::Tower` (`src/models/qwen3_5/chip/tower.h`) holds one conversation: an FP32 recurrent state
+and a BF16 convolution window per layer. `step` runs one token with the Op sequence of the Op
+test. The artifact stores query, key and value as three matrices, so `step` calls `linear` once
+for each into one buffer. One row of a BF16 projection is one FP32 dot product, so the words are
+those of a single call.
+
+The constructor reads the firmware state once, turns each head from (key dim, value dim) to the
+Op's (value dim, key dim), and keeps the result on the device. `load_firmware` copies it over the
+recurrent states.
+
+`owner` decodes the output code (`chip/code.h`). A code bit is set where its residual dim is
+positive. The tower owns the next position when any code dim is nonzero. The family id selects a
+chip token family, a control token, or the echo family, whose payload `p` names text token
+`printable[p]`. The family table is the `rv1-tower` layout's and is fixed in `code.h`.
+
+`begin` runs a prompt from zero states and then loads the firmware. `advance` runs text tokens the
+text model wrote. `burst` starts at an owned position: it runs each chip token through the tower,
+collects each text token the tower names (the firmware's echo), runs that token too, and stops
+when the tower no longer owns the next position.
+
+### Runtime test
+
+    build/tests/ninfer_chip_runtime_test ARTIFACT GOLDEN.raw \
+        [--firmware NAME] [--control all|none|fp16|weight] [--device-profile NAME] [--limit N]
+
+`tests/models/qwen3_5/test_chip_runtime.cpp` loads the converted artifact with the engine's
+loader, installs the device route profile as the engine does, and replays the bundle's ids through
+`chip::Tower`. It compares the kept dims bit for bit. After the prompt it also compares the token
+`owner` names with the stream's next token wherever the tower owns the position. The controls are
+those of the Op test, and each must fail the kept-dim comparison. It is its own program, not part
+of the `ninfer_tests` bundle.
+
+## Decoding
+
+The Engine owns one `chip::Tower` (`ModelInstance::chip`), so `--chip` requires one lane on one
+device. `--chip` is refused together with `--spec` or n-gram drafting: a drafted round can commit
+tokens past a `</tool_call>`, and that case is not shown to be safe.
+
+With `--chip`, the server adds the `calc` tool definition (the one in qwenputer's `rv/chat.py`) to
+every request that does not declare a tool named `calc` (`chip_calc_tool` in
+`src/serve/translate.cpp`). The definition goes through the renderer that a client's tools go
+through, so the prompt equals the prompt of a client that declares the same tool.
+
+`EngineCore::follow_chip` runs after every commit of model tokens:
+
+- At the request's first commit it runs the prompt's token ids through the tower (`begin`).
+- It runs the committed text tokens (`advance`).
+- If the tower owns the position after the last one, it runs the burst and gives the echo tokens
+  to the request's `OutputSession` (`set_chip_echo`). The request becomes control-ready, and the
+  next control unit forces the echo through the text model with `Program::append_forced_tokens`,
+  the path the thinking-budget close uses. The text model's KV cache and recurrent state then
+  hold the echo, and decoding goes on from its last token.
+
+Chip tokens run through the tower only. They are not in `generated_token_ids`, in the text
+model's positions, or in the output budget. Echo tokens are generated tokens and count against
+the budget.
+
+While a tool call is open (`<tool_call>` committed, `</tool_call>` not yet),
+`OutputSession::model_token_budget_remaining` gives a round one model token. The close tag is then
+the last token of its round, so a speculative round cannot write past it before the burst.
+
+If the echo does not leave the text model one token of budget, the echo is cut to the remaining
+budget less one. The text model's next round then ends the request.
+
+The answered call is returned inline. When the echo commits,
+`ToolCallOutputDecoder::resolve_in_model` releases the held tool-call region as content, and the
+echo's bytes follow it, special tokens included (`<tool_response>`, `</tool_response>`, `<think>`,
+`</think>`). The request's result has no structured call for it, and the text the model writes
+after the echo is content. A grammar of the request does not read the echo.
+
+A tower error (an output code that names no token, a burst of more than 60000 chip tokens) is
+logged, ends the tower's part in that request, and leaves the text model decoding.
+
+Each burst writes one Info diagnostic: `chip burst | request N | C chip tokens | E echo tokens
+(K kept) | T ms`.
+
+`--chip-trace FILE` (`EngineOptions::chip_trace_path`) appends one JSON line per burst to `FILE`:
+the request id, the model's call tokens from `<tool_call>` on, and the burst's stream (chip tokens
+at `chip_token_offset + t` and echo tokens, in order). The served witness reads it.
+
+A request whose echo was cut ends with its limit reason, whatever its last round names.
+
+### Limits
+
+- The tower runs one token per step, about 2 ms on an RTX 4090. A prompt costs that for every
+  token before the first output token, on every request, and prefix-cache reuse does not shorten
+  it. The chunked Ops are not used: their exactness on the tower is not measured.
+- A burst runs inside one Engine unit. A cancellation is seen after it.
+- If the tower owns a position that is not the end of a decode round, the burst is skipped.

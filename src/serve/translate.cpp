@@ -136,6 +136,21 @@ std::string render_tool_definition(const ToolDefinition& tool) {
     return Json{{"type", "function"}, {"function", std::move(function)}}.dump();
 }
 
+ToolDefinition chip_calc_tool() {
+    return ToolDefinition{
+        .name        = "calc",
+        .description = "Evaluate an arithmetic expression exactly, with numbers of up to 62 "
+                       "digits: + - * / and parentheses on integers and fractions (exact: the "
+                       "result is an integer or a reduced fraction p/q), + - * on decimals, and on "
+                       "integers also // (floor division), %, ** and gcd(a,b). Returns the exact "
+                       "value.",
+        .input_schema_json =
+            R"({"type": "object", "properties": {"expression": {"type": "string", )"
+            R"("description": "e.g. 123456789*987654321-42 or 1.25*-3.5 or 84/18"}}, )"
+            R"("required": ["expression"]})",
+    };
+}
+
 // The wire value passes through unchanged. Templates accept different effort sets (the maintained
 // Qwen3.8 template only low, medium and xhigh) while clients send the standard vocabulary (OpenAI
 // and Claude Code 'high', pi 'minimal' and 'max'); the compiled template probes its accepted set
@@ -224,6 +239,7 @@ ResolvedPromptSemantics resolve_prompt_semantics(const GenerationRequest& reques
         .preserve_thinking           = preserve ? preserve : server.preserve_thinking,
         .requested_preserve_thinking = preserve,
         .chat_template_kwargs_json   = kwargs.dump(),
+        .chip_calc_tool              = !server.chip_firmware.empty(),
     };
     // The server's default effort yields to everything the request decides: its own thinking
     // switch, a forced call, and an assistant prefill.
@@ -389,6 +405,11 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
                 .after_tool_count = static_cast<std::uint32_t>(index + 1U),
             });
         }
+    }
+    bool declares_calc = false;
+    for (const ToolDefinition* tool : tools) { declares_calc = declares_calc || tool->name == "calc"; }
+    if (semantics.chip_calc_tool && !declares_calc) {
+        input.options.tool_jsons.push_back(render_tool_definition(chip_calc_tool()));
     }
     if (request.uses_tools()) { input.options.forced_tool_name = request.tool_choice.forced_name; }
     input.context_cache.allow_engine_automatic_shared_prefixes =

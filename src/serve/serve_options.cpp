@@ -153,6 +153,12 @@ std::string serve_usage_text(const char* argv0) {
            "                                experts in the text layers' formats\n"
            "  --gdn-state-fp16              keep the GDN recurrent state in FP16 (halves\n"
            "                                each host state image)\n"
+           "  --chip NAME                   run the artifact's chip tower beside the text\n"
+           "                                model with firmware NAME (for example\n"
+           "                                calc-bridge); needs --max-concurrency 1\n"
+           "                                and no --spec; adds the calc tool to requests\n"
+           "  --chip-trace FILE             with --chip, append one JSON line per chip burst\n"
+           "                                to FILE (the call and the burst's token ids)\n"
            "  --rope-yarn                   past the model's native window, apply Qwen's\n"
            "                                YaRN at factor max-context / native instead of\n"
            "                                unscaled RoPE\n"
@@ -1272,6 +1278,20 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.gdn_state_fp16 = true;
             continue;
         }
+        if (arg == "--chip") {
+            options.chip_firmware = require_value("--chip");
+            if (options.chip_firmware.empty()) {
+                throw std::invalid_argument("--chip needs a firmware name");
+            }
+            continue;
+        }
+        if (arg == "--chip-trace") {
+            options.chip_trace_path = require_value("--chip-trace");
+            if (options.chip_trace_path.empty()) {
+                throw std::invalid_argument("--chip-trace needs a file name");
+            }
+            continue;
+        }
         if (arg == "--rope-yarn") {
             options.rope_yarn = true;
             continue;
@@ -1642,6 +1662,17 @@ ServeOptions parse_serve_options(int argc, char** argv) {
     }
     if (options.max_concurrency == 0 || options.max_concurrency > kMaximumConcurrency) {
         throw std::invalid_argument("--max-concurrency must be in [1,8]");
+    }
+    if (!options.chip_firmware.empty() && options.max_concurrency != 1) {
+        throw std::invalid_argument("--chip requires --max-concurrency 1");
+    }
+    if (!options.chip_firmware.empty() &&
+        (options.speculative.backend != SpeculativeBackend::None ||
+         options.speculative.ngram_draft_tokens != 0)) {
+        throw std::invalid_argument("--chip cannot be combined with --spec or n-gram drafting");
+    }
+    if (!options.chip_trace_path.empty() && options.chip_firmware.empty()) {
+        throw std::invalid_argument("--chip-trace requires --chip");
     }
     if (options.max_pending_requests == 0) {
         throw std::invalid_argument("--max-pending-requests must be positive");

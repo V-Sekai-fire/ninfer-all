@@ -415,3 +415,8 @@ ordinary, MTP, DFlash and DFlash2 execution.
 ```
 
 Read the reported finish reason: an output/context limit or cancellation can truncate the JSON.
+
+## Chip tower
+
+`ninfer` has no chip tower option. `ninfer-serve --chip NAME` runs an artifact's chip tower
+([chip tower](maintainer/chip-tower.md), [server options](serving.md#server-options)).

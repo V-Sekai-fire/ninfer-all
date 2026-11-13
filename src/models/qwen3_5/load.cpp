@@ -106,6 +106,7 @@ LoadPlan plan_load(const artifact::Reader& reader, LoadOptions options,
                                 std::string(options.speculative_component()));
         draft_parameters.second = bindings.weights.size();
     }
+    if (out->config.chip) { out->weights.chip = loading::bind_chip(bindings, *out->config.chip); }
     if (options.proposal_enabled()) {
         const auto& proposal = reader.directory().component("text").proposal;
         if (!proposal) {

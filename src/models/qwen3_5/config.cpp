@@ -282,7 +282,128 @@ DraftConfig draft(const Json& value, const TextConfig& target, bool dflash2) {
     return out;
 }
 
+std::vector<std::uint32_t> token_ids(const Json& value, std::string_view label,
+                                     std::uint32_t limit) {
+    if (!value.is_array()) { throw ArtifactError(std::string(label) + " must be a list"); }
+    std::vector<std::uint32_t> out;
+    out.reserve(value.size());
+    for (const Json& item : value) {
+        const std::uint32_t id = integer(item, label, false);
+        if (id >= limit) { throw ArtifactError(std::string(label) + " exceeds the text vocabulary"); }
+        out.push_back(id);
+    }
+    return out;
+}
+
+ChipConfig chip(const Json& value, const TextConfig& target, const std::string& firmware) {
+    require_members(value,
+                    {"architectures", "model_type", "hidden_size", "vocab_size",
+                     "intermediate_size", "linear_num_key_heads", "linear_key_head_dim",
+                     "linear_num_value_heads", "linear_value_head_dim", "linear_conv_kernel_dim",
+                     "rms_norm_eps", "num_hidden_layers", "layer_types", "chip_config"},
+                    {}, "chip config");
+    if (architecture(value) != "ChipTower" || value.at("model_type") != "chip_tower") {
+        throw ArtifactError("chip architecture/model_type mismatch");
+    }
+    if (!target.gdn || !std::holds_alternative<DenseConfig>(target.ffn)) {
+        throw ArtifactError("the chip tower needs a Dense text model with Gated DeltaNet layers");
+    }
+    ChipConfig out;
+    out.hidden_size       = dimension(value, "hidden_size");
+    out.vocab_size        = dimension(value, "vocab_size");
+    out.intermediate_size = dimension(value, "intermediate_size");
+    out.num_hidden_layers = dimension(value, "num_hidden_layers");
+    out.rms_norm_eps      = positive_float(value, "rms_norm_eps");
+    out.gdn               = GdnConfig{
+        dimension(value, "linear_num_key_heads"), dimension(value, "linear_key_head_dim"),
+        dimension(value, "linear_num_value_heads"), dimension(value, "linear_value_head_dim"),
+        dimension(value, "linear_conv_kernel_dim")};
+    const GdnConfig& host = *target.gdn;
+    if (out.gdn.linear_num_key_heads != host.linear_num_key_heads ||
+        out.gdn.linear_key_head_dim != host.linear_key_head_dim ||
+        out.gdn.linear_num_value_heads != host.linear_num_value_heads ||
+        out.gdn.linear_value_head_dim != host.linear_value_head_dim ||
+        out.gdn.linear_conv_kernel_dim != host.linear_conv_kernel_dim ||
+        out.rms_norm_eps != target.rms_norm_eps) {
+        throw ArtifactError("chip Gated DeltaNet geometry differs from the text model's");
+    }
+    if (out.gdn.linear_key_head_dim != 128 || out.gdn.linear_value_head_dim != 128 ||
+        out.gdn.linear_conv_kernel_dim != 4) {
+        throw ArtifactError("chip Gated DeltaNet geometry is not the recurrent Op's");
+    }
+    const Json& layers = value.at("layer_types");
+    if (!layers.is_array() || layers.size() != out.num_hidden_layers) {
+        throw ArtifactError("chip layer_types must cover every tower layer");
+    }
+    for (const Json& layer : layers) {
+        if (layer != "linear_attention") {
+            throw ArtifactError("chip layers must be linear_attention");
+        }
+    }
+    const Json& config = value.at("chip_config");
+    require_members(config,
+                    {"layout", "chip_token_offset", "chip_vocab", "nfam", "npay", "code_dims",
+                     "tool_call", "printable", "eos", "firmware"},
+                    {"ballast_dims"}, "chip_config");
+    if (config.at("layout") != "rv1-tower") { throw ArtifactError("unknown chip layout"); }
+    out.chip_token_offset = dimension(config, "chip_token_offset");
+    out.chip_vocab        = dimension(config, "chip_vocab");
+    out.family_bits       = dimension(config, "nfam");
+    out.payload_bits      = dimension(config, "npay");
+    if (out.chip_token_offset != target.vocab_size ||
+        std::uint64_t(out.chip_token_offset) + out.chip_vocab > out.vocab_size) {
+        throw ArtifactError("chip token ids do not follow the text vocabulary");
+    }
+    if (out.family_bits > 16 || out.payload_bits > 16) {
+        throw ArtifactError("chip output code is wider than 32 bits");
+    }
+    const Json& code = config.at("code_dims");
+    if (!code.is_array() || code.size() != out.family_bits + out.payload_bits) {
+        throw ArtifactError("chip code_dims must name nfam + npay residual dims");
+    }
+    for (const Json& dim : code) {
+        const std::uint32_t index = integer(dim, "chip code dim", false);
+        if (index >= out.hidden_size) { throw ArtifactError("chip code dim exceeds the residual"); }
+        out.code_dims.push_back(index);
+    }
+    const std::vector<std::uint32_t> call = token_ids(config.at("tool_call"), "chip tool_call", target.vocab_size);
+    if (call.size() != 2) { throw ArtifactError("chip tool_call must name two tokens"); }
+    out.tool_call_open  = call[0];
+    out.tool_call_close = call[1];
+    out.printable       = token_ids(config.at("printable"), "chip printable", target.vocab_size);
+    out.eos             = token_ids(config.at("eos"), "chip eos", target.vocab_size);
+    const Json& names   = config.at("firmware");
+    bool found          = false;
+    std::string known;
+    if (names.is_array()) {
+        for (const Json& name : names) {
+            if (!name.is_string()) { continue; }
+            known += (known.empty() ? "" : ", ") + name.get<std::string>();
+            found = found || name.get<std::string>() == firmware;
+        }
+    }
+    if (!found) {
+        throw ArtifactError("chip firmware " + firmware + " is not in the artifact (it has: " +
+                            known + ")");
+    }
+    out.firmware = firmware;
+    return out;
+}
+
 } // namespace
+
+TextConfig ChipConfig::block_config() const {
+    TextConfig out;
+    out.hidden_size             = hidden_size;
+    out.vocab_size              = vocab_size;
+    out.num_hidden_layers       = num_hidden_layers;
+    out.rms_norm_eps            = rms_norm_eps;
+    out.layer_types.assign(num_hidden_layers, MixerKind::LinearAttention);
+    out.linear_attention_layers = num_hidden_layers;
+    out.gdn                     = gdn;
+    out.ffn                     = DenseConfig{intermediate_size};
+    return out;
+}
 
 VisionConfig parse_vision_config(const artifact::Directory& directory) {
     return vision(directory.component("vision").config);
@@ -338,6 +459,15 @@ Config parse_config(const artifact::Directory& directory, const LoadOptions& opt
             options.speculative == SpeculativeBackend::DFlash2) {
             out.draft = draft(companion(directory, options.speculative_component()).config,
                               out.text, options.speculative == SpeculativeBackend::DFlash2);
+        }
+        if (!options.chip_firmware.empty()) {
+            if (options.purpose != EnginePurpose::Generation) {
+                throw ArtifactError("the chip tower runs with a Generation engine only");
+            }
+            if (!directory.components.contains("chip")) {
+                throw ArtifactError("--chip needs an artifact converted with the chip tower");
+            }
+            out.chip = chip(companion(directory, "chip").config, out.text, options.chip_firmware);
         }
         return out;
     } catch (const std::exception& error) {

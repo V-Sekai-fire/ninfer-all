@@ -11,4 +11,5 @@ target_sources(ninfer_model_runtime PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/execution/vision_cpu.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/execution/draft.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/execution/visual_scatter.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/chip/tower.cpp"
 )

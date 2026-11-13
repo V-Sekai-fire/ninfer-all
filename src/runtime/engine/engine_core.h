@@ -5,6 +5,8 @@
 #include "core/device.h"
 #include "core/device_snapshot.h"
 #include "core/nvtx.h"
+#include "models/qwen3_5/chip/tower.h"
+#include "models/qwen3_5/frontend/prepared_prompt.h"
 #include "ninfer/types.h"
 #include "runtime/contract/execution.h"
 #include "runtime/contract/resources.h"
@@ -136,6 +138,7 @@ public:
                 .total_bytes   = options.speculative.ngram_archive_bytes});
         }
         diagnostics_ = options.diagnostic_observer;
+        chip_trace_path_ = options.chip_trace_path;
         if (options.suspend.enabled) {
             if (!instance_.suspendable()) {
                 throw std::logic_error("model suspend is enabled but the instance is not suspendable");
@@ -324,10 +327,18 @@ public:
                 prompt, options.stop, options.output, options.execution.thinking,
                 options.execution.structured_output);
             options.execution.grammar = output.grammar_state();
+            std::vector<TokenId> chip_prompt;
+            if (instance_.chip) {
+                const models::qwen3_5::ChipConfig& chip = instance_.chip->config();
+                output.enable_chip(static_cast<TokenId>(chip.tool_call_open),
+                                   static_cast<TokenId>(chip.tool_call_close));
+                chip_prompt = models::qwen3_5::PreparedPromptAccess::view(prompt).token_ids;
+            }
             request = std::make_shared<Request>(request_id, publication_order, std::move(prompt),
                                                 std::move(output), prompt_summary, prepare_seconds,
                                                 std::move(options), consumer_mode, observation,
                                                 pending_deadline, submitted);
+            request->chip_prompt = std::move(chip_prompt);
             effective_budget = request->output.thinking_stats().effective_budget;
         } catch (...) {
             release_reserved_capacity();
@@ -1915,7 +1926,9 @@ private:
                         ++terminal_count;
                     } else {
                         request->model_state     = EngineRequestState::ModelFinished;
-                        request->terminal_reason = finish_reasons[row];
+                        request->terminal_reason = request->chip_echo_cut
+                                                       ? request->budget->limit_reason()
+                                                       : finish_reasons[row];
                     }
                 } else if (committed.captures[row]) {
                     if (!request->is_prefilling()) {
@@ -1945,6 +1958,9 @@ private:
                             ? EngineRequestState::ControlReady
                             : EngineRequestState::DecodeReady;
                 }
+                if (instance_.chip && !decisions[row].terminal && !cancelled[row]) {
+                    follow_chip(request, accepted);
+                }
             }
         } catch (...) {
             phase.finish();
@@ -1970,6 +1986,86 @@ private:
         if (terminal_count != 0) { publish_runtime_stats(); }
         complete_terminal_rows(terminal_requests, terminal_reasons, terminal_errors,
                                terminal_count);
+    }
+
+    static std::string chip_id_list(std::span<const TokenId> ids) {
+        std::string out;
+        for (const TokenId id : ids) {
+            if (!out.empty()) { out.push_back(','); }
+            out += std::to_string(id);
+        }
+        return out;
+    }
+
+    void follow_chip(const std::shared_ptr<Request>& request, std::uint32_t accepted) {
+        constexpr std::uint32_t kBurstLimit = 60000;
+        if (request->chip_failed || accepted == 0 || accepted > request->generated.size()) {
+            return;
+        }
+        models::qwen3_5::chip::Tower& tower = *instance_.chip;
+        try {
+            const Clock::time_point started = Clock::now();
+            if (!request->chip_started) {
+                tower.begin(request->chip_prompt);
+                request->chip_started = true;
+                std::vector<TokenId>().swap(request->chip_prompt);
+            }
+            const std::span<const TokenId> tokens(
+                request->generated.data() + (request->generated.size() - accepted), accepted);
+            const std::optional<TokenId> owner = tower.advance(tokens);
+            if (!owner) { return; }
+            if (!request->is_decode_ready() || request->capture_pending) {
+                publish_diagnostic(diagnostics_, DiagnosticLevel::Warning,
+                                   "chip tower | request %llu | owned position skipped: the "
+                                   "request is not at a decode boundary",
+                                   static_cast<unsigned long long>(request->id));
+                return;
+            }
+            const Clock::time_point burst_started = Clock::now();
+            models::qwen3_5::chip::Burst burst    = tower.burst(*owner, kBurstLimit);
+            const double burst_ms =
+                static_cast<double>(elapsed_ns(burst_started, Clock::now())) * 1e-6;
+            std::size_t call_begin = request->generated.size();
+            const TokenId open     = static_cast<TokenId>(tower.config().tool_call_open);
+            while (call_begin != 0 && request->generated[call_begin - 1] != open) { --call_begin; }
+            if (call_begin != 0) { --call_begin; }
+            const std::uint32_t remaining = request->budget->remaining();
+            std::size_t kept              = burst.echo.size();
+            if (kept >= remaining) { kept = remaining == 0 ? 0 : remaining - 1U; }
+            publish_diagnostic(
+                diagnostics_, DiagnosticLevel::Info,
+                "chip burst | request %llu | %u chip tokens | %zu echo tokens (%zu kept) | "
+                "%.1f ms%s",
+                static_cast<unsigned long long>(request->id), burst.chip_tokens,
+                burst.echo.size(), kept, burst_ms,
+                burst.truncated ? " | stopped at the chip token limit" : "");
+            if (!chip_trace_path_.empty()) {
+                if (std::FILE* file = std::fopen(chip_trace_path_.c_str(), "a")) {
+                    std::fprintf(
+                        file,
+                        "{\"request\": %llu, \"chip_tokens\": %u, \"kept\": %zu, "
+                        "\"burst_ms\": %.1f, \"call\": [%s], \"stream\": [%s]}\n",
+                        static_cast<unsigned long long>(request->id), burst.chip_tokens, kept,
+                        burst_ms,
+                        chip_id_list(std::span<const TokenId>(request->generated)
+                                         .subspan(call_begin))
+                            .c_str(),
+                        chip_id_list(burst.stream).c_str());
+                    std::fclose(file);
+                }
+            }
+            if (burst.truncated || kept != burst.echo.size()) { request->chip_failed = true; }
+            request->chip_echo_cut = kept != burst.echo.size();
+            if (kept == 0) { return; }
+            burst.echo.resize(kept);
+            request->output.set_chip_echo(std::move(burst.echo));
+            request->model_state = EngineRequestState::ControlReady;
+        } catch (const std::exception& error) {
+            request->chip_failed = true;
+            publish_diagnostic(diagnostics_, DiagnosticLevel::Error,
+                               "chip tower | request %llu | stopped: %s",
+                               static_cast<unsigned long long>(request->id), error.what());
+        }
     }
 
     void complete_terminal_rows(
@@ -3325,6 +3421,7 @@ private:
     const std::exception_ptr oom_fallback_error_ = std::make_exception_ptr(
         RequestError(RequestErrorKind::Overloaded, "engine out of memory during execution"));
     DiagnosticObserver diagnostics_;
+    std::string chip_trace_path_;
     // Model residency. The snapshots exist only when suspend is enabled and are touched under the
     // execution mutex; the flags are also read by submit and is_available without it.
     const ModelSuspendOptions suspend_options_;

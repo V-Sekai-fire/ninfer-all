@@ -531,6 +531,21 @@ public:
             HeldLogprob{.record = std::move(record), .start = fed_before});
     }
     bool preview_ready = false;
+    bool chip_enabled           = false;
+    TokenId chip_open_token     = -1;
+    TokenId chip_close_token    = -1;
+    bool chip_call_open         = false;
+    bool preview_chip_call_open = false;
+    bool preview_chip_echo      = false;
+    std::vector<TokenId> chip_echo;
+
+    void track_chip_call(TokenId token) noexcept {
+        if (token == chip_open_token) {
+            preview_chip_call_open = true;
+        } else if (token == chip_close_token) {
+            preview_chip_call_open = false;
+        }
+    }
     std::shared_ptr<text::GrammarState> grammar;
     std::unique_ptr<text::GrammarState> preview_grammar;
 };
@@ -610,6 +625,11 @@ OutputSession::preview_model(std::span<const TokenId> tokens, std::uint32_t tota
     impl_->preview_execution_split_after.reset();
     impl_->preview_output.clear();
     impl_->preview_logprobs.clear();
+    impl_->preview_chip_call_open = impl_->chip_call_open;
+    impl_->preview_chip_echo      = false;
+    if (!impl_->chip_echo.empty()) {
+        throw std::logic_error("model output cannot advance while a chip echo is pending");
+    }
 
     const auto complete = [&](std::uint32_t count, FinishReason reason,
                               runtime::ContinuationAction continuation =
@@ -638,6 +658,7 @@ OutputSession::preview_model(std::span<const TokenId> tokens, std::uint32_t tota
         const std::uint32_t count          = static_cast<std::uint32_t>(index + 1);
         const TokenId token                = tokens[index];
         const fi::DecodedTokenView decoded = impl_->tokenizer->decoded_token(token);
+        if (impl_->chip_enabled) { impl_->track_chip_call(token); }
 
         if (const auto boundary = impl_->preview_prefix_execution.feed(decoded.bytes);
             boundary && *boundary == decoded.bytes.size()) {
@@ -736,6 +757,10 @@ OutputSession::preview_model(std::span<const TokenId> tokens, std::uint32_t tota
 
 std::uint32_t
 OutputSession::model_token_budget_remaining(std::uint32_t total_budget_remaining) const noexcept {
+    if (impl_ != nullptr && impl_->chip_enabled && impl_->chip_call_open &&
+        total_budget_remaining > 1) {
+        total_budget_remaining = 1;
+    }
     if (impl_ == nullptr || !impl_->semantic.budget || !impl_->semantic.in_reasoning ||
         impl_->semantic.applied || !impl_->early_close_available) {
         return total_budget_remaining;
@@ -748,7 +773,30 @@ OutputSession::model_token_budget_remaining(std::uint32_t total_budget_remaining
                     *impl_->semantic.budget - impl_->semantic.model_thinking_tokens);
 }
 
+void OutputSession::enable_chip(TokenId tool_call_open, TokenId tool_call_close) {
+    if (impl_ == nullptr) { throw std::logic_error("output session is empty"); }
+    impl_->chip_enabled     = true;
+    impl_->chip_open_token  = tool_call_open;
+    impl_->chip_close_token = tool_call_close;
+}
+
+bool OutputSession::chip_tool_call_open() const noexcept {
+    return impl_ != nullptr && impl_->chip_call_open;
+}
+
+void OutputSession::set_chip_echo(std::vector<TokenId> tokens) {
+    if (impl_ == nullptr || !impl_->chip_enabled) {
+        throw std::logic_error("output session has no chip tower");
+    }
+    if (impl_->state.terminal || impl_->preview_ready || impl_->semantic.control_pending ||
+        !impl_->chip_echo.empty() || tokens.empty()) {
+        throw std::logic_error("output session cannot take a chip echo now");
+    }
+    impl_->chip_echo = std::move(tokens);
+}
+
 std::span<const TokenId> OutputSession::pending_control_tokens() const noexcept {
+    if (impl_ != nullptr && !impl_->chip_echo.empty()) { return impl_->chip_echo; }
     if (impl_ == nullptr || !impl_->semantic.control_pending || !impl_->thinking_control_tokens) {
         return {};
     }
@@ -785,6 +833,29 @@ runtime::OutputDecision OutputSession::preview_control(std::span<const TokenId> 
     impl_->preview_execution_split_after.reset();
     impl_->preview_output.clear();
     impl_->preview_logprobs.clear();
+    impl_->preview_chip_call_open = impl_->chip_call_open;
+    impl_->preview_chip_echo      = false;
+    if (!impl_->chip_echo.empty()) {
+        for (std::size_t index = 0; index < tokens.size(); ++index) {
+            const TokenId token                = tokens[index];
+            const fi::DecodedTokenView decoded = impl_->tokenizer->decoded_token(token);
+            impl_->track_chip_call(token);
+            if (const std::optional<std::size_t> boundary =
+                    impl_->preview_prefix_execution.feed(decoded.bytes);
+                boundary && *boundary == decoded.bytes.size()) {
+                impl_->preview_execution_split_after = static_cast<std::uint32_t>(index + 1U);
+            }
+            feed_semantic_thinking(impl_->preview_semantic, decoded.bytes);
+            feed_token_bytes(impl_->preview_state, decoded.bytes, impl_->policy,
+                             impl_->preview_output, static_cast<std::uint32_t>(index + 1), nullptr);
+        }
+        impl_->preview_chip_echo = true;
+        impl_->preview_ready     = true;
+        return runtime::OutputDecision{
+            .accepted_tokens              = static_cast<std::uint32_t>(tokens.size()),
+            .prefix_execution_split_after = impl_->preview_execution_split_after,
+        };
+    }
     for (std::size_t index = 0; index < tokens.size(); ++index) {
         const TokenId token                = tokens[index];
         const fi::DecodedTokenView decoded = impl_->tokenizer->decoded_token(token);
@@ -833,6 +904,8 @@ runtime::OutputDecision OutputSession::preview_terminal(FinishReason reason) {
     impl_->preview_prefix_execution = impl_->prefix_execution;
     impl_->preview_execution_split_after.reset();
     impl_->preview_semantic.control_pending = false;
+    impl_->preview_chip_call_open           = impl_->chip_call_open;
+    impl_->preview_chip_echo                = false;
     impl_->preview_output.clear();
     impl_->preview_logprobs.clear();
     impl_->preview_grammar.reset();
@@ -857,6 +930,27 @@ PublishedOutput OutputSession::commit_preview() {
     impl_->committed_logprobs = std::move(impl_->preview_logprobs);
     impl_->preview_logprobs.clear();
     impl_->preview_ready = false;
+    impl_->chip_call_open = impl_->preview_chip_call_open;
+    if (impl_->preview_chip_echo) {
+        impl_->preview_chip_echo = false;
+        impl_->chip_echo.clear();
+        std::string inline_call =
+            impl_->gemma_tools ? std::string() : impl_->tool_call_output.resolve_in_model();
+        for (OutputDelta& delta : output) {
+            if (delta.channel == OutputChannel::Content) {
+                inline_call += delta.text;
+                delta.text.clear();
+            }
+        }
+        if (!inline_call.empty()) {
+            if (output.empty() || output.back().channel != OutputChannel::Content) {
+                output.push_back(OutputDelta{.channel = OutputChannel::Content});
+            }
+            output.back().text = std::move(inline_call);
+        }
+        return output;
+    }
+    if (impl_->state.terminal) { impl_->chip_echo.clear(); }
 
     for (OutputDelta& delta : output) {
         if (delta.channel == OutputChannel::Content) {

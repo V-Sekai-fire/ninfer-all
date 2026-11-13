@@ -202,6 +202,10 @@ struct RequestRecord {
     // The catalog cell and session digest the finished session was retained under, if any.
     std::int32_t retained_slot = -1;
     std::string retained_session_digest;
+    std::vector<TokenId> chip_prompt;
+    bool chip_started = false;
+    bool chip_failed  = false;
+    bool chip_echo_cut = false;
 
     std::mutex mutex;
     std::condition_variable cv;
