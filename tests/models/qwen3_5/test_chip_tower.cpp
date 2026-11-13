@@ -24,6 +24,7 @@
 #include <cstring>
 #include <exception>
 #include <fstream>
+#include <functional>
 #include <initializer_list>
 #include <iostream>
 #include <iterator>
@@ -52,7 +53,7 @@ struct Json {
     std::vector<std::pair<std::string, Json>> fields;
 
     const Json* find(std::string_view key) const {
-        for (const auto& field : fields) {
+        for (const std::pair<std::string, Json>& field : fields) {
             if (field.first == key) { return &field.second; }
         }
         return nullptr;
@@ -228,7 +229,10 @@ public:
         file_.read(header.data(), static_cast<std::streamsize>(header_bytes));
         if (!file_) { throw std::runtime_error("safetensors: truncated header"); }
         base_ = 8 + header_bytes;
-        for (const auto& [name, value] : JsonParser(header).parse().fields) {
+        const Json parsed = JsonParser(header).parse();
+        for (const std::pair<std::string, Json>& item : parsed.fields) {
+            const std::string& name = item.first;
+            const Json& value       = item.second;
             if (name == "__metadata__") { continue; }
             Entry entry;
             entry.dtype = value.at("dtype").text;
@@ -242,7 +246,7 @@ public:
     }
 
     const Entry& entry(const std::string& name, std::string_view dtype) const {
-        const auto it = entries_.find(name);
+        const std::map<std::string, Entry>::const_iterator it = entries_.find(name);
         if (it == entries_.end()) { throw std::runtime_error("safetensors: no tensor " + name); }
         if (it->second.dtype != dtype) {
             throw std::runtime_error("safetensors: " + name + " is " + it->second.dtype);
@@ -262,7 +266,8 @@ public:
     }
 
     std::string find_suffix(std::string_view prefix, std::string_view suffix) const {
-        for (const auto& [name, entry] : entries_) {
+        for (const std::pair<const std::string, Entry>& item : entries_) {
+            const std::string& name = item.first;
             if (name.starts_with(prefix) && name.ends_with(suffix)) { return name; }
         }
         throw std::runtime_error("safetensors: no tensor " + std::string(prefix) + "*" +
@@ -306,7 +311,7 @@ DeviceBuffer upload(const std::vector<T>& host) {
 }
 
 Matrix load_matrix(SafeTensors& file, const std::string& name) {
-    const auto& entry = file.entry(name, "BF16");
+    const SafeTensors::Entry& entry = file.entry(name, "BF16");
     if (entry.shape.size() != 2) { throw std::runtime_error(name + " is not a matrix"); }
     Matrix m;
     m.n      = static_cast<std::int32_t>(entry.shape[0]);
@@ -354,7 +359,7 @@ Tower load_tower(const std::string& dir) {
         config.at("linear_value_head_dim").integer() != 128) {
         throw std::runtime_error("tower: unsupported GDN geometry");
     }
-    const auto count = config.at("chip_config").at("chip_layers").integer();
+    const std::int64_t count = config.at("chip_config").at("chip_layers").integer();
     for (std::int64_t index = 0; index < count; ++index) {
         const std::string p = "model.layers." + std::to_string(index) + ".";
         Layer layer;
@@ -366,7 +371,7 @@ Tower load_tower(const std::string& dir) {
         layer.gate = load_matrix(file, p + "mlp.gate_proj.weight");
         layer.up   = load_matrix(file, p + "mlp.up_proj.weight");
         layer.down = load_matrix(file, p + "mlp.down_proj.weight");
-        const auto conv = file.read<std::uint16_t>(p + "linear_attn.conv1d.weight", "BF16");
+        const std::vector<std::uint16_t> conv = file.read<std::uint16_t>(p + "linear_attn.conv1d.weight", "BF16");
         const std::size_t channels = static_cast<std::size_t>(tower.channels);
         if (conv.size() != channels * 4 || layer.qkv.n != tower.channels) {
             throw std::runtime_error("tower: unexpected conv shape");
@@ -385,7 +390,7 @@ Tower load_tower(const std::string& dir) {
         tower.layers.push_back(std::move(layer));
     }
     const std::string state = file.find_suffix("firmware.", ".state");
-    const auto& shape       = file.entry(state, "F32").shape;
+    const std::vector<std::int64_t>& shape = file.entry(state, "F32").shape;
     if (shape != std::vector<std::int64_t>{count, tower.value_heads, 128, 128}) {
         throw std::runtime_error("tower: unexpected firmware state shape");
     }
@@ -409,7 +414,7 @@ Golden load_golden(const std::string& dir) {
     for (const Json& dim : meta.at("dims").items) {
         golden.dims.push_back(static_cast<std::int32_t>(dim.integer()));
     }
-    const auto n = static_cast<std::size_t>(golden.positions);
+    const std::size_t n = static_cast<std::size_t>(golden.positions);
     golden.ids   = read_raw<std::int32_t>(dir + "/" + meta.at("ids").text, n);
     golden.kept  = read_raw<std::uint32_t>(dir + "/" + meta.at("kept").text, n * golden.dims.size());
     return golden;
@@ -551,7 +556,7 @@ Outcome run(Tower& tower, const Golden& golden, const Options& options) {
     Tensor qkv(b_qkv.p, DType::BF16, {C, 1}), z(b_z.p, DType::BF16, {V, 1});
     Tensor a(b_a.p, DType::BF16, {Hv, 1}), b(b_b.p, DType::BF16, {Hv, 1});
     Tensor conv(b_conv.p, DType::BF16, {C, 1});
-    auto* conv_bytes = static_cast<std::uint8_t*>(b_conv.p);
+    std::uint8_t* conv_bytes = static_cast<std::uint8_t*>(b_conv.p);
     Tensor q(conv_bytes, DType::BF16, {128, Hq, 1});
     Tensor k(conv_bytes + static_cast<std::size_t>(Hq) * 128 * 2, DType::BF16, {128, Hq, 1});
     Tensor v(conv_bytes + static_cast<std::size_t>(Hq) * 128 * 4, DType::BF16, {128, Hv, 1});
@@ -568,7 +573,7 @@ Outcome run(Tower& tower, const Golden& golden, const Options& options) {
     outcome.positions =
         options.limit >= 0 ? std::min(options.limit, golden.positions) : golden.positions;
     std::vector<std::uint16_t> residual(static_cast<std::size_t>(D));
-    const auto start = std::chrono::steady_clock::now();
+    const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
     for (std::int64_t t = 0; t < outcome.positions; ++t) {
         if (t == golden.inject_at) { load_firmware(tower, fp16, states); }
         const bool dumping = t == options.dump_at;
@@ -600,11 +605,11 @@ Outcome run(Tower& tower, const Golden& golden, const Options& options) {
                                gated, nullptr);
             ops::linear(gated_flat, layer.out.weight(), y, nullptr);
             if (dumping) {
-                for (const auto& [name, tensor] : Named{
+                for (const std::pair<const char*, const Tensor*>& item : Named{
                          {"norm1", &n}, {"qkv", &qkv}, {"z", &z}, {"a", &a}, {"b", &b},
                          {"conv", &conv}, {"g", &g}, {"beta", &beta}, {"core", &core},
                          {"gated", &gated}, {"attn", &y}, {"state_out", &state}}) {
-                    dump(options, index, name, *tensor);
+                    dump(options, index, item.first, *item.second);
                 }
             }
             ops::residual_add(y, h, nullptr);
@@ -615,9 +620,9 @@ Outcome run(Tower& tower, const Golden& golden, const Options& options) {
             ops::silu_mul(gate, up, act, nullptr);
             ops::linear(act, layer.down.weight(), y, nullptr);
             if (dumping) {
-                for (const auto& [name, tensor] : Named{
+                for (const std::pair<const char*, const Tensor*>& item : Named{
                          {"norm2", &n}, {"gate", &gate}, {"up", &up}, {"act", &act}, {"mlp", &y}}) {
-                    dump(options, index, name, *tensor);
+                    dump(options, index, item.first, *item.second);
                 }
             }
             ops::residual_add(y, h, nullptr);
@@ -679,7 +684,7 @@ int main(int argc, char** argv) {
     options.control = "all";
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
-        const auto next            = [&]() -> std::string {
+        const std::function<std::string()> next = [&]() -> std::string {
             if (i + 1 >= argc) { throw std::invalid_argument("missing value"); }
             return argv[++i];
         };
