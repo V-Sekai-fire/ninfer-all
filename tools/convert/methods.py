@@ -197,6 +197,32 @@ def cast_direct(request: PrepareRequest) -> PreparedMethod:
     return request.job(produce=produce)
 
 
+def exact_direct(request: PrepareRequest) -> PreparedMethod:
+    """Store values in a direct BF16/FP32 format, refusing any value the format would round."""
+    if not isinstance(get_format(request.target.format), DirectFormat):
+        raise ValueError("exact_direct requires a direct target format")
+    _preflight(request)
+    dtype = _DIRECT_DTYPES[request.target.format]
+    if not dtype.is_floating_point:
+        raise ValueError("exact_direct requires a floating-point target format")
+    chunk = request.rows_per_chunk * (
+        request.target.shape[-1] if len(request.target.shape) > 1 else 1
+    )
+    elements = prod(request.target.shape)
+
+    def produce(output):
+        for begin in range(0, elements, chunk):
+            values = request.values(begin, min(elements, begin + chunk))
+            stored = values.to(dtype=dtype)
+            if not torch.equal(stored.to(dtype=torch.float64), values.to(dtype=torch.float64)):
+                raise ValueError(
+                    f"{request.target.id}: a value is not exact in {request.target.format}"
+                )
+            output.write_values(begin, stored)
+
+    return request.job(produce=produce)
+
+
 def grouped_absmax(request: PrepareRequest) -> PreparedMethod:
     """Use the existing grouped max-abs, FP16-scale and code-rounding algorithm."""
     if (
@@ -390,6 +416,7 @@ def import_encoded(request: PrepareRequest) -> PreparedMethod:
 
 METHODS: dict[str, Method] = {
     "cast_direct": cast_direct,
+    "exact_direct": exact_direct,
     "grouped_absmax": grouped_absmax,
     "grouped_search": grouped_search,
     "fp8_row_maxabs": fp8_row_maxabs,

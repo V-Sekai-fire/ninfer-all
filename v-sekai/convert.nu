@@ -8,6 +8,7 @@ def main [
     --sources: path = "sources"
     --out: path = "models/bonsai2-27b-heretic.ninfer"
     --device: string = "cpu"
+    --chip: path             # a chip tower directory (qwenputer's export_tower); adds the chip component
     --max-file-bytes: int    # split into an entry and .part-NNNN files of at most this many bytes (for example, to keep each file below a 2 GB limit)
 ] {
     let root = ($env.FILE_PWD | path dirname)
@@ -19,7 +20,8 @@ def main [
         --source $"ternary=($sources | path join Heretic-v2-GGUF Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf)"
         --source $"mtp=($sources | path join Ternary-Bonsai-2-27B-MTP model_mtp.safetensors)"
         --source $"dflash2=($sources | path join Ternary-Bonsai-2-27B-DFlash2)"
-        --components text,vision,mtp,dflash2
+        --components (if $chip == null { "text,vision,mtp,dflash2" } else { "text,vision,mtp,dflash2,chip" })
+        ...(if $chip == null { [] } else { [--source $"chip=($chip)"] })
         --resource chat_template.jinja=tools/chat_templates/qwen3_8.jinja
         --proposal
         --device $device
