@@ -77,6 +77,9 @@ public:
     [[nodiscard]] runtime::OutputDecision preview_control(std::span<const TokenId> tokens,
                                                           std::uint32_t total_budget_remaining);
     [[nodiscard]] runtime::OutputDecision preview_terminal(FinishReason reason);
+    void enable_chip(TokenId tool_call_open, TokenId tool_call_close);
+    [[nodiscard]] bool chip_tool_call_open() const noexcept;
+    void set_chip_echo(std::vector<TokenId> tokens);
     [[nodiscard]] PublishedOutput commit_preview();
     // The logprob records of the content tokens whose first byte the last commit published, in
     // generation order. A content token's bytes go to the content channel: after the reasoning

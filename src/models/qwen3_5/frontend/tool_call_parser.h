@@ -96,6 +96,7 @@ public:
 
     [[nodiscard]] std::string feed(std::string_view text);
     [[nodiscard]] Terminal finish();
+    [[nodiscard]] std::string resolve_in_model();
 
 private:
     std::shared_ptr<const ToolCallOutputContract> contract_;

@@ -1080,6 +1080,21 @@ std::string ToolCallOutputDecoder::feed(std::string_view text) {
     return visible;
 }
 
+std::string ToolCallOutputDecoder::resolve_in_model() {
+    if (finished_) { throw std::logic_error("tool-call output decoder is already finished"); }
+    if (!contract_) { return {}; }
+    std::string released = std::move(trailing_whitespace_);
+    released.append(pending_marker_);
+    released.append(std::string_view(tool_region_).substr(seeded_prefix_bytes_));
+    trailing_whitespace_.clear();
+    tool_region_.clear();
+    pending_marker_.clear();
+    seeded_prefix_bytes_ = 0;
+    saw_tool_marker_     = false;
+    forced_              = false;
+    return released;
+}
+
 ToolCallOutputDecoder::Terminal ToolCallOutputDecoder::finish() {
     if (finished_) { throw std::logic_error("tool-call output decoder is already finished"); }
     finished_ = true;

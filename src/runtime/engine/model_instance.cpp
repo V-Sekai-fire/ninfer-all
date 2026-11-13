@@ -28,6 +28,7 @@
 #include <system_error>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -86,6 +87,15 @@ void validate_options(const EngineOptions& options) {
     }
     if (options.max_concurrency == 0 || options.max_concurrency > kMaximumConcurrency) {
         throw std::invalid_argument("Engine max_concurrency must be in [1,8]");
+    }
+    if (!options.chip_firmware.empty() &&
+        (options.max_concurrency != 1 || options.devices.size() > 1 ||
+         options.purpose != EnginePurpose::Generation ||
+         options.speculative.backend != SpeculativeBackend::None ||
+         options.speculative.ngram_draft_tokens != 0)) {
+        throw std::invalid_argument(
+            "the chip tower needs a Generation Engine with one lane on one device and no "
+            "speculative decoding");
     }
     if (options.max_pending_requests == 0 || options.pending_timeout_ms == 0) {
         throw std::invalid_argument("Engine pending request capacity and timeout must be nonzero");
@@ -682,6 +692,14 @@ ConstructedModel construct_model(const EngineOptions& requested, DeviceContext& 
     }
     StartupPhaseScope frontend(options.startup_observer, StartupPhase::FrontendInitialize);
     auto instance = std::make_unique<ModelInstance>(std::move(model), options);
+    if (instance->model->config().chip) {
+        models::qwen3_5::chip::TowerOptions tower;
+        if (const char* word = std::getenv("NINFER_CHIP_FLIP_STATE_WORD")) {
+            tower.flipped_state_word = std::strtoull(word, nullptr, 10);
+        }
+        instance->chip = std::make_unique<models::qwen3_5::chip::Tower>(*instance->model,
+                                                                         device.stream, tower);
+    }
     frontend.complete();
     StartupPhaseScope planning(options.startup_observer, StartupPhase::TargetFinalize);
     const std::size_t overlay_window_bytes =

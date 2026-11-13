@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/device_snapshot.h"
+#include "models/qwen3_5/chip/tower.h"
 #include "models/qwen3_5/model.h"
 #include "models/qwen3_5/execution/parameters.h"
 #include "models/qwen3_5/program/runtime_types.h"
@@ -26,6 +27,7 @@ struct ModelInstance {
     KvCapacityResolution kv_capacity_resolution;
     const std::uint32_t capacity;
     std::unique_ptr<models::qwen3_5::Program> program;
+    std::unique_ptr<models::qwen3_5::chip::Tower> chip;
 
     ModelInstance(std::unique_ptr<models::qwen3_5::Model> model, const EngineOptions& options);
     ~ModelInstance();
