@@ -27,7 +27,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <exception>
@@ -139,6 +138,7 @@ public:
                 .total_bytes   = options.speculative.ngram_archive_bytes});
         }
         diagnostics_ = options.diagnostic_observer;
+        chip_trace_path_ = options.chip_trace_path;
         if (options.suspend.enabled) {
             if (!instance_.suspendable()) {
                 throw std::logic_error("model suspend is enabled but the instance is not suspendable");
@@ -2037,8 +2037,8 @@ private:
                 static_cast<unsigned long long>(request->id), burst.chip_tokens,
                 burst.echo.size(), kept, burst_ms,
                 burst.truncated ? " | stopped at the chip token limit" : "");
-            if (const char* trace = std::getenv("NINFER_CHIP_TRACE")) {
-                if (std::FILE* file = std::fopen(trace, "a")) {
+            if (!chip_trace_path_.empty()) {
+                if (std::FILE* file = std::fopen(chip_trace_path_.c_str(), "a")) {
                     std::fprintf(
                         file,
                         "{\"request\": %llu, \"chip_tokens\": %u, \"kept\": %zu, "
@@ -3418,6 +3418,7 @@ private:
     const std::exception_ptr oom_fallback_error_ = std::make_exception_ptr(
         RequestError(RequestErrorKind::Overloaded, "engine out of memory during execution"));
     DiagnosticObserver diagnostics_;
+    std::string chip_trace_path_;
     // Model residency. The snapshots exist only when suspend is enabled and are touched under the
     // execution mutex; the flags are also read by submit and is_available without it.
     const ModelSuspendOptions suspend_options_;

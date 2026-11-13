@@ -88,6 +88,7 @@ struct ServeOptions {
     bool mtp_experts_q4     = false;
     bool gdn_state_fp16     = false;
     std::string chip_firmware;
+    std::string chip_trace_path;
     bool rope_yarn          = false;
     float rope_yarn_factor  = 1.0F;
     float rope_scaling_factor                   = 1.0F;

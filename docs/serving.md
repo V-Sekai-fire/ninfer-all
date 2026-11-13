@@ -1860,6 +1860,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--mtp-experts-q4` | Qwen3.6-35B-A3B: store the MTP layer's routed experts in the text layers' formats | off |
 | `--gdn-state-fp16` | keep the GDN recurrent state in FP16, which halves each Host StateImage ([quality trades](maintainer/quality-trade-experiments.md)) | FP32 |
 | `--chip NAME` | run the artifact's chip tower beside the text model with firmware `NAME`, for example `calc-bridge` ([chip tower](maintainer/chip-tower.md)); requires `--max-concurrency 1`, one device and no `--spec`; adds the `calc` tool to each request and returns the answered call inline in the content | off |
+| `--chip-trace FILE` | with `--chip`, append one JSON line per chip burst to `FILE`: the request id, the call's token ids and the burst's token ids | off |
 | `--default-max-tokens N` | output limit when omitted by a request; see [default output limit](#default-output-limit) | largest budget that keeps every lane admissible |
 | `--default-thinking-budget N` | positive thinking cap inherited by thinking-enabled requests | unset |
 | `--no-webui` | stop serving a WebUI built in with `NINFER_WEBUI_DIR` | served when built in |

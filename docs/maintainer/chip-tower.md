@@ -159,7 +159,7 @@ when the tower no longer owns the next position.
 ### Runtime test
 
     build/tests/ninfer_chip_runtime_test ARTIFACT GOLDEN.raw \
-        [--firmware NAME] [--control all|none|fp16|weight] [--device-profile auto|off] [--limit N]
+        [--firmware NAME] [--control all|none|fp16|weight] [--device-profile NAME] [--limit N]
 
 `tests/models/qwen3_5/test_chip_runtime.cpp` loads the converted artifact with the engine's
 loader, installs the device route profile as the engine does, and replays the bundle's ids through
@@ -198,7 +198,7 @@ While a tool call is open (`<tool_call>` committed, `</tool_call>` not yet),
 the last token of its round, so a speculative round cannot write past it before the burst.
 
 If the echo does not leave the text model one token of budget, the echo is cut to the remaining
-budget less one. The text model's next round then ends the request with its limit reason.
+budget less one. The text model's next round then ends the request.
 
 The answered call is returned inline. When the echo commits,
 `ToolCallOutputDecoder::resolve_in_model` releases the held tool-call region as content, and the
@@ -212,13 +212,9 @@ logged, ends the tower's part in that request, and leaves the text model decodin
 Each burst writes one Info diagnostic: `chip burst | request N | C chip tokens | E echo tokens
 (K kept) | T ms`.
 
-Two environment variables exist for the witnesses only:
-
-- `NINFER_CHIP_TRACE=FILE` appends one JSON line per burst: the request id, the model's call tokens
-  from `<tool_call>` on, and the burst's stream (chip tokens at `chip_token_offset + t` and echo
-  tokens, in order).
-- `NINFER_CHIP_FLIP_STATE_WORD=N` flips the sign of the N-th nonzero word of the firmware state
-  when the tower is built. It is the control that must break the reference comparison.
+`--chip-trace FILE` (`EngineOptions::chip_trace_path`) appends one JSON line per burst to `FILE`:
+the request id, the model's call tokens from `<tool_call>` on, and the burst's stream (chip tokens
+at `chip_token_offset + t` and echo tokens, in order). The served witness reads it.
 
 ### Limits
 
