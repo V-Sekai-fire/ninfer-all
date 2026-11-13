@@ -1,16 +1,4 @@
-"""The chip tower: an exact RV32 machine in Gated DeltaNet layers, beside a Qwen3.5-family text model.
-
-The tower comes from `--source chip=DIR`, a directory qwenputer's `chipformer.rv.export_tower`
-writes: `config.json` (architecture `ChipTower`) and `model.safetensors` with the layers under
-Hugging Face names, the tower's own token table, and each firmware's parked DeltaNet state.
-The tower has its own residual width and MLP width; its Gated DeltaNet head geometry is the text
-model's, so the text model's recurrent kernels run it.
-
-Every tower value is a weight a compiler computed, not a trained one: the circuit is exact only
-if each stored word is the compiler's value. The recipe therefore stores every tower parameter in
-a direct format with `exact_direct`, which refuses a value the format would round, and keeps each
-parameter in its own object.
-"""
+"""The chip tower component (docs/maintainer/chip-tower.md)."""
 
 from __future__ import annotations
 
@@ -45,7 +33,6 @@ def _token_ids(values, limit: int, label: str, count: int | None = None) -> list
 
 
 def chip_config(raw: dict, target: dict) -> dict:
-    """The tower's mathematical config, checked against the text model it runs beside."""
 
     _required(raw, "architectures", [ARCHITECTURE], "chip")
     _required(raw, "model_type", "chip_tower", "chip")
@@ -71,7 +58,6 @@ def chip_config(raw: dict, target: dict) -> dict:
         raise ValueError(
             "chip.layer_types must be linear_attention layers and one closing full_attention"
         )
-    # The closing full-attention layer is all zero (the reference decoder's position counter).
     result["num_hidden_layers"] = len(layers) - 1
     result["layer_types"] = layers[:-1]
     chip = raw.get("chip_config")
@@ -127,7 +113,6 @@ def chip_config(raw: dict, target: dict) -> dict:
 
 
 def add_chip(builder, store, config: dict) -> None:
-    """The tower's logical parameters: its token table, its layers, each firmware's state."""
 
     h = config["hidden_size"]
     builder.add(
@@ -158,7 +143,6 @@ def add_chip(builder, store, config: dict) -> None:
 
 
 def assign_chip(model, recipe) -> None:
-    """Store every tower parameter exactly, one object each."""
 
     names = [name for name in model.parameters if name.startswith("chip/")]
     for name in names:
