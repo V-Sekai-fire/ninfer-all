@@ -202,7 +202,7 @@ int run_main(int argc, char** argv) {
     std::vector<std::string> paths;
     std::string control  = "all";
     std::string firmware = "calc-bridge";
-    std::string profile  = "auto";
+    std::string profile  = EngineOptions{}.device_profile;
     std::size_t limit    = static_cast<std::size_t>(-1);
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
