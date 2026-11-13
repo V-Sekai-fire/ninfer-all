@@ -80,3 +80,42 @@ when:
 
 `--plant` is the control. It flips one bit of one text object while that object is hashed. The
 exit status is then 0 only if the check fails.
+
+## Engine test
+
+`tests/models/qwen3_5/test_chip_tower.cpp` (`ninfer_chip_tower_test`) runs the exported tower
+through the public Ops and compares the result with the reference bit for bit.
+
+    build/tests/ninfer_tests ninfer_chip_tower_test TOWER GOLDEN.raw \
+        [--control all|none|fp16|weight] [--limit N] [--dump POSITION DIR]
+
+`TOWER` is the source directory. `GOLDEN.raw` is the bundle that qwenputer's
+`chipformer.rv.towercheck --golden` writes next to its parquet table: `ids.i32`, `kept.f32` and
+`golden.json` (positions, the kept residual dims in column order, and `inject_at`). Without
+arguments the test reads `NINFER_CHIP_TOWER` and `NINFER_CHIP_TOWER_GOLDEN`, and is skipped when
+they are not set.
+
+The test reads `model.safetensors` directly, so it does not depend on the converter. It uploads
+each matrix as a dense BF16 `Weight`, as the direct BF16 Op tests do. For each token it calls,
+per layer: `embedding`, `rmsnorm` (unit offset), `linear` four times (q/k/v, z, a, b),
+`causal_conv1d_silu`, `gdn_gating`, `gated_delta_net` (one token, normalized q/k),
+`gated_rmsnorm`, `linear`, `residual_add`, `rmsnorm`, `linear` twice, `silu_mul`, `linear` and
+`residual_add`. The tower's shapes are not registered shapes, so every `linear` call takes the
+runtime-shape BF16 route (one warp per output row at one token, FP32 accumulator). The fused
+GDN input projection and the fused SwiGLU Ops are not used: they accept registered shapes only.
+
+The test keeps one FP32 recurrent state and one BF16 convolution window per layer. Both start at
+zero. Before position `inject_at` it overwrites every recurrent state with the firmware state
+and keeps the convolution windows. The Op stores a state as (head, value dim, key dim), and the
+tower stores it as (head, key dim, value dim), so the test transposes each head.
+
+The test prints one JSON line per run: the number of positions, the number of inexact positions,
+and the position, the residual dim and the two values of the first mismatch.
+
+The two controls must fail the comparison. `fp16` keeps the recurrent states in FP16, which
+`gated_delta_net` accepts as a state dtype. `weight` flips the sign bit of the first nonzero
+`down_proj` weight of the middle layer. With `--control all` (the default) the exit status is 0
+only if the plain run is exact and both controls fail.
+
+`--dump POSITION DIR` writes every intermediate tensor of one position as raw files
+(`L<layer>.<name>.bin`), to compare with the reference when a run is not exact.
