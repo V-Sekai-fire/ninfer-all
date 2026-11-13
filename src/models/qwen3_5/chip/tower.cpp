@@ -190,16 +190,6 @@ Tower::Tower(const Model& model, cudaStream_t stream, TowerOptions options) {
             }
         }
     }
-    if (options.flipped_state_word) {
-        std::uint64_t seen = 0;
-        for (float& word : turned) {
-            if (word == 0.0F) { continue; }
-            if (seen++ == *options.flipped_state_word) {
-                word = -word;
-                break;
-            }
-        }
-    }
     s.firmware = DeviceBuffer(s.state_bytes * s.layers.size());
     if (s.fp16) {
         std::vector<std::uint16_t> halves(turned.size());

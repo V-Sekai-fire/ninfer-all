@@ -15,7 +15,6 @@ namespace ninfer::models::qwen3_5::chip {
 
 struct TowerOptions {
     bool fp16_state = false;
-    std::optional<std::uint64_t> flipped_state_word;
 };
 
 struct Burst {

@@ -28,7 +28,6 @@
 #include <system_error>
 #include <chrono>
 #include <cstdio>
-#include <cstdlib>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -693,12 +692,8 @@ ConstructedModel construct_model(const EngineOptions& requested, DeviceContext& 
     StartupPhaseScope frontend(options.startup_observer, StartupPhase::FrontendInitialize);
     auto instance = std::make_unique<ModelInstance>(std::move(model), options);
     if (instance->model->config().chip) {
-        models::qwen3_5::chip::TowerOptions tower;
-        if (const char* word = std::getenv("NINFER_CHIP_FLIP_STATE_WORD")) {
-            tower.flipped_state_word = std::strtoull(word, nullptr, 10);
-        }
-        instance->chip = std::make_unique<models::qwen3_5::chip::Tower>(*instance->model,
-                                                                         device.stream, tower);
+        instance->chip =
+            std::make_unique<models::qwen3_5::chip::Tower>(*instance->model, device.stream);
     }
     frontend.complete();
     StartupPhaseScope planning(options.startup_observer, StartupPhase::TargetFinalize);
