@@ -216,6 +216,8 @@ Each burst writes one Info diagnostic: `chip burst | request N | C chip tokens |
 the request id, the model's call tokens from `<tool_call>` on, and the burst's stream (chip tokens
 at `chip_token_offset + t` and echo tokens, in order). The served witness reads it.
 
+A request whose echo was cut ends with its limit reason, whatever its last round names.
+
 ### Limits
 
 - The tower runs one token per step, about 2 ms on an RTX 4090. A prompt costs that for every

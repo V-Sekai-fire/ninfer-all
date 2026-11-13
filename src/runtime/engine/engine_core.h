@@ -1926,7 +1926,9 @@ private:
                         ++terminal_count;
                     } else {
                         request->model_state     = EngineRequestState::ModelFinished;
-                        request->terminal_reason = finish_reasons[row];
+                        request->terminal_reason = request->chip_echo_cut
+                                                       ? request->budget->limit_reason()
+                                                       : finish_reasons[row];
                     }
                 } else if (committed.captures[row]) {
                     if (!request->is_prefilling()) {
@@ -2053,6 +2055,7 @@ private:
                 }
             }
             if (burst.truncated || kept != burst.echo.size()) { request->chip_failed = true; }
+            request->chip_echo_cut = kept != burst.echo.size();
             if (kept == 0) { return; }
             burst.echo.resize(kept);
             request->output.set_chip_echo(std::move(burst.echo));

@@ -205,6 +205,7 @@ struct RequestRecord {
     std::vector<TokenId> chip_prompt;
     bool chip_started = false;
     bool chip_failed  = false;
+    bool chip_echo_cut = false;
 
     std::mutex mutex;
     std::condition_variable cv;
