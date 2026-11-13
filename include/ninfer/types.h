@@ -639,6 +639,7 @@ struct EngineOptions {
     // per-slot host state image.
     bool lm_head_q4                        = false;
     bool gdn_state_fp16                    = false;
+    std::string chip_firmware;
     // Device-memory trades that store a W8 vocabulary matrix at a narrower group-64 width while
     // the weights load (the artifact is unchanged). lm_head_q6 saves ~26% of the output head for
     // +0.01% perplexity; embedding_q4 halves the token embedding with no measurable perplexity

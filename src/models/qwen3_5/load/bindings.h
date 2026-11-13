@@ -98,6 +98,7 @@ private:
                                       const std::string& component);
 void bind_dflash2(Bindings& bindings, DraftWeights& weights, const DraftConfig& config,
                   const TextConfig& target);
+[[nodiscard]] ChipWeights bind_chip(Bindings& bindings, const ChipConfig& config);
 [[nodiscard]] ProposalWeights bind_proposal(Bindings& bindings, const artifact::Proposal& proposal,
                                             const TextConfig& target, const LoadOptions& options,
                                             std::uint32_t public_tokens);

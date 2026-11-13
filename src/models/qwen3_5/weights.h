@@ -151,6 +151,12 @@ struct DraftWeights {
     WeightUseId output_head_use;
 };
 
+struct ChipWeights {
+    WeightId token_embedding;
+    std::vector<BlockWeights> layers;
+    WeightId firmware_state;
+};
+
 struct ProposalWeights {
     WeightId head;
     std::optional<WeightId> token_ids;
@@ -165,6 +171,7 @@ struct ModelWeights {
     std::optional<MtpWeights> mtp;
     std::optional<DraftWeights> draft;
     std::optional<ProposalWeights> proposal;
+    std::optional<ChipWeights> chip;
 };
 
 } // namespace ninfer::models::qwen3_5

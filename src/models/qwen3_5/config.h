@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -138,11 +139,33 @@ struct DraftConfig {
     }
 };
 
+struct ChipConfig {
+    std::uint32_t hidden_size       = 0;
+    std::uint32_t vocab_size        = 0;
+    std::uint32_t intermediate_size = 0;
+    std::uint32_t num_hidden_layers = 0;
+    float rms_norm_eps              = 0;
+    GdnConfig gdn;
+    std::uint32_t chip_token_offset = 0;
+    std::uint32_t chip_vocab        = 0;
+    std::uint32_t family_bits  = 0;
+    std::uint32_t payload_bits = 0;
+    std::vector<std::uint32_t> code_dims;
+    std::uint32_t tool_call_open  = 0;
+    std::uint32_t tool_call_close = 0;
+    std::vector<std::uint32_t> printable;
+    std::vector<std::uint32_t> eos;
+    std::string firmware;
+
+    [[nodiscard]] TextConfig block_config() const;
+};
+
 struct Config {
     TextConfig text;
     std::optional<VisionConfig> vision;
     bool mtp = false;
     std::optional<DraftConfig> draft;
+    std::optional<ChipConfig> chip;
 };
 
 [[nodiscard]] Config parse_config(const artifact::Directory& directory, const LoadOptions& options);
