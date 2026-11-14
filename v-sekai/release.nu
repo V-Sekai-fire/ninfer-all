@@ -12,7 +12,7 @@
 const volume_limit = 1900000000
 const desync_repo = "https://github.com/V-Sekai-fire/multiplayer-fabric-desync.git"
 const desync_rev = "5140d6b273315da434a69f5bf095e7ba2427bd6e"
-const repo = "V-Sekai-fire/ninfer-all"
+const repo = "V-Sekai-fire/interactor-language-ninfer"
 
 def check [what: string] {
     if $env.LAST_EXIT_CODE != 0 { error make {msg: $"($what) failed with exit code ($env.LAST_EXIT_CODE)"} }

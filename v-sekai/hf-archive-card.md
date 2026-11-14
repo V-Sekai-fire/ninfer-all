@@ -10,7 +10,7 @@ conversion read, so the artifact can be rebuilt or served without the upstream r
 
 ## What it is for
 
-- `models/` holds the artifact that the V-Sekai-fire/ninfer-all CUDA engine and its Apple silicon
+- `models/` holds the artifact that the V-Sekai-fire/interactor-language-ninfer CUDA engine and its Apple silicon
   MLX loader (`v-sekai/mlx/`) serve, with the converter's `conversion.json` report.
 - `sources/` holds the converter inputs. Their upstream repositories are fetched without a pinned
   revision, so this copy is the fixed input set.
@@ -28,6 +28,23 @@ The independent MLX conversion that `v-sekai/mlx/parity_reference.py` compares a
 from that public repository when needed.
 
 `models/` is the output of `v-sekai/convert.nu` (recipe `bonsai2_27b_ternary`) on these sources.
+
+## The artifact with a chip tower
+
+`models/chip/` holds the same artifact with one more component, `chip`: an RV32IM processor
+compiled into eleven Gated DeltaNet layers, which `ninfer-serve --chip calc-bridge` runs beside
+the text model to answer a `calc` tool call from inside the artifact. Every other parameter is
+bound to objects with the same bytes as in the artifact converted without the tower by the same
+converter commit; `SHA256SUMS` beside it names both files.
+
+- `sources/tower-27b/` is the tower's source: `config.json` and `model.safetensors` (the layers,
+  the token table and the parked `calc-bridge` firmware state), written by
+  `chipformer.rv.export_tower` in V-Sekai-fire/qwenputer for Qwen3.8-27B's head geometry.
+- `sources/tower-27b/golden-calc-bridge.parquet` and `golden-calc-bridge.raw/` are the reference
+  stream (17,792 positions) that the engine's tower tests are held to.
+- `models/chip/` is the output of `v-sekai/convert.nu --chip sources/tower-27b`.
+
+The design and its witnesses are in `docs/maintainer/chip-tower.md` of V-Sekai-fire/interactor-language-ninfer.
 
 ## Use
 
