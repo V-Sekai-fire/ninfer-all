@@ -371,7 +371,7 @@ int main(int argc, char** argv)
     fs::path assets;
     fs::path target = fs::current_path();
     std::string tag;
-    std::string repository = "V-Sekai-fire/ninfer-all";
+    std::string repository = "V-Sekai-fire/interactor-language-ninfer";
     bool online = false;
     for (int i = 1; i < argc; ++i)
     {
