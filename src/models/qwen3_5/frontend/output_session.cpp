@@ -532,6 +532,7 @@ public:
     }
     bool preview_ready = false;
     bool chip_enabled           = false;
+    bool chip_round_cap         = true;
     TokenId chip_open_token     = -1;
     TokenId chip_close_token    = -1;
     bool chip_call_open         = false;
@@ -757,7 +758,7 @@ OutputSession::preview_model(std::span<const TokenId> tokens, std::uint32_t tota
 
 std::uint32_t
 OutputSession::model_token_budget_remaining(std::uint32_t total_budget_remaining) const noexcept {
-    if (impl_ != nullptr && impl_->chip_enabled && impl_->chip_call_open &&
+    if (impl_ != nullptr && impl_->chip_enabled && impl_->chip_round_cap && impl_->chip_call_open &&
         total_budget_remaining > 1) {
         total_budget_remaining = 1;
     }
@@ -773,9 +774,10 @@ OutputSession::model_token_budget_remaining(std::uint32_t total_budget_remaining
                     *impl_->semantic.budget - impl_->semantic.model_thinking_tokens);
 }
 
-void OutputSession::enable_chip(TokenId tool_call_open, TokenId tool_call_close) {
+void OutputSession::enable_chip(TokenId tool_call_open, TokenId tool_call_close, bool round_cap) {
     if (impl_ == nullptr) { throw std::logic_error("output session is empty"); }
     impl_->chip_enabled     = true;
+    impl_->chip_round_cap   = round_cap;
     impl_->chip_open_token  = tool_call_open;
     impl_->chip_close_token = tool_call_close;
 }

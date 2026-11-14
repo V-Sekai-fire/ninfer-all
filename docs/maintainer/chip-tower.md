@@ -171,8 +171,9 @@ of the `ninfer_tests` bundle.
 ## Decoding
 
 The Engine owns one `chip::Tower` (`ModelInstance::chip`), so `--chip` requires one lane on one
-device. `--chip` is refused together with `--spec` or n-gram drafting: a drafted round can commit
-tokens past a `</tool_call>`, and that case is not shown to be safe.
+device. `--chip` runs without a drafter or with `--spec dflash2` and `--draft-tokens` of at most 11.
+It is refused with `--spec mtp`, `--spec dflash` and n-gram drafting; with `--chip` the n-gram
+width defaults to 0. The section "Drafting" gives the reasons.
 
 With `--chip`, the server adds the `calc` tool definition (the one in qwenputer's `rv/chat.py`) to
 every request that does not declare a tool named `calc` (`chip_calc_tool` in
@@ -224,4 +225,37 @@ A request whose echo was cut ends with its limit reason, whatever its last round
   token before the first output token, on every request, and prefix-cache reuse does not shorten
   it. The chunked Ops are not used: their exactness on the tower is not measured.
 - A burst runs inside one Engine unit. A cancellation is seen after it.
-- If the tower owns a position that is not the end of a decode round, the burst is skipped.
+- A malformed tool call shorter than a drafted round can be closed and passed in one round (see
+  "Drafting"). The burst is then skipped with a Warning diagnostic and a `skipped` trace event.
+
+## Drafting
+
+A DFlash2 round commits the drafts the target accepts and one more token. Its draft extent is
+`min(proposed, budget - 1, ...)` (`ProgramImpl::decode_dflash_batch`), so a round budget of one
+gives a round of exactly one token. While a tool call is open the budget is one, so every token
+after `<tool_call>` ends its own round, and the burst starts at the end of the round that commits
+`</tool_call>`.
+
+The Program does not let a round that goes on accept fewer tokens than it produced
+(`ProgramImpl::commit`). The round that commits `<tool_call>` is an ordinary round of up to
+`draft_tokens + 1` tokens. If it also commits `</tool_call>` and one more token, that token is
+committed before the echo. This needs a call of at most `draft_tokens` tokens. The shortest
+well-formed call is 12 tokens (25 for `calc` with a one-character expression), so
+`--draft-tokens` is limited to 11 (`kChipMaximumDraftTokens`). A malformed call can still be
+that short. The Engine steps the tower one token at a time inside a round, so it sees such a
+position: it writes a Warning diagnostic and counts it; it does not start a burst there.
+
+N-gram drafting is refused because it copies runs of earlier text, an earlier tool call and its
+response among them. MTP and DFlash are refused because they were not measured.
+
+The echo is forced with `Program::append_forced_tokens`. Under a drafter that call first appends
+the drafter's context up to the frontier, then runs the forced tokens through the prefill path
+with the drafter attached, and moves the drafter's context frontier with them. The drafter is
+then where a prompt that held the echo would leave it.
+
+The `--chip-trace` file holds three events: `burst`; `open_round`, a round that committed more
+than one token while a call was open; and `skipped`, an owned position where no burst could
+start. Each `burst` line carries the two running counts. Both counts must be zero.
+
+`--chip-test-no-round-cap` switches the one-token budget off. It exists for the witness that
+shows the budget is what keeps the counts at zero. Do not use it to serve.

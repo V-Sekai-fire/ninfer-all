@@ -285,6 +285,7 @@ ninfer::EngineOptions make_engine_options(const ServeOptions& options) {
     engine_options.gdn_state_fp16           = options.gdn_state_fp16;
     engine_options.chip_firmware            = options.chip_firmware;
     engine_options.chip_trace_path          = options.chip_trace_path;
+    engine_options.chip_test_no_round_cap   = options.chip_test_no_round_cap;
     engine_options.rope_yarn                = options.rope_yarn;
     engine_options.rope_yarn_factor         = options.rope_yarn_factor;
     engine_options.rope_scaling_factor           = options.rope_scaling_factor;

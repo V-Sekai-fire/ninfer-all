@@ -90,11 +90,13 @@ void validate_options(const EngineOptions& options) {
     if (!options.chip_firmware.empty() &&
         (options.max_concurrency != 1 || options.devices.size() > 1 ||
          options.purpose != EnginePurpose::Generation ||
-         options.speculative.backend != SpeculativeBackend::None ||
-         options.speculative.ngram_draft_tokens != 0)) {
+         (options.speculative.backend != SpeculativeBackend::None &&
+          options.speculative.backend != SpeculativeBackend::DFlash2) ||
+         options.speculative.ngram_draft_tokens != 0 ||
+         options.speculative.draft_tokens > kChipMaximumDraftTokens)) {
         throw std::invalid_argument(
-            "the chip tower needs a Generation Engine with one lane on one device and no "
-            "speculative decoding");
+            "the chip tower needs a Generation Engine with one lane on one device, and no "
+            "drafter or DFlash2 with at most 11 draft tokens");
     }
     if (options.max_pending_requests == 0 || options.pending_timeout_ms == 0) {
         throw std::invalid_argument("Engine pending request capacity and timeout must be nonzero");

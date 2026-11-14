@@ -18,9 +18,10 @@ Without `--chip` the same artifact serves as the artifact without the tower does
 - One NVIDIA card with 24 GB, Fedora 44 (native or WSL2), and the engine built from this
   repository at a commit that has `--chip` (`ninfer-serve --help` lists it).
 - About 13 GB of disk for the artifact.
-- A `--chip` server has one request lane, one device and no drafter. It decodes text more slowly
-  than a server with DFlash2: 71.6 against 105.1 tokens per second on an RTX 4090, both without
-  a drafter. Keep the DFlash2 server of RFD66606-2311 for work that does not need the tower.
+- A `--chip` server has one request lane and one device. With the DFlash2 drafter it decodes text
+  at about 95 tokens per second on an RTX 4090; the DFlash2 server of RFD66606-2311 without the
+  tower gives about 180, and a `--chip` server without a drafter about 72. Keep the server
+  without the tower for work that does not need it.
 
 ## Procedure 1: get the artifact
 
@@ -40,21 +41,21 @@ Without `--chip` the same artifact serves as the artifact without the tower does
 
 1. Check that the card is free: `nvidia-smi` shows at least 17 GB of free memory (the test
    server used 16 GB with this serving line).
-2. Start the server. This is the serving line of RFD66606-2311 with the drafter options removed
-   and `--chip` added:
+2. Start the server. This is the serving line of RFD66606-2311 with `--chip` added:
 
        ninfer-serve models/chip/bonsai2-27b-heretic-chip.ninfer \
            --device 0 --host 127.0.0.1 --port <port> --api-key ${NINFER_API_KEY} \
            --model-id bonsai-27b --max-context 262144 --kv-capacity 262144 \
            --kv-dtype rk8v4 --vision --max-concurrency 1 --no-thinking \
-           --chip calc-bridge
+           --spec dflash2 --draft-tokens 5 --chip calc-bridge
 
 3. Wait for the line `listening on` in its log.
 4. On a host that keeps the server, run it as a systemd service unit of its own, on its own port,
    as RFD66606-2311 describes for the DFlash2 server. Do not start it with `nohup` or `&`.
 
 The server stops at startup, with a message that names the option, when `--chip` is given with
-`--spec`, with n-gram drafting, with `--max-concurrency` above 1, with more than one device, or
+`--spec mtp` or `--spec dflash`, with `--draft-tokens` above 11, with n-gram drafting (its width
+is 0 under `--chip` unless you set it), with `--max-concurrency` above 1, with more than one device, or
 with a firmware name the artifact does not hold. `--chip-trace` needs `--chip`.
 
 ## Procedure 3: ask it
@@ -175,7 +176,7 @@ Do not leave the trace on for a server in service: the file grows with every cal
 
 | What you see | Cause | What to do |
 | --- | --- | --- |
-| The server stops at startup and names `--chip` | `--chip` with a drafter, more than one lane, more than one device, or an unknown firmware name | Remove the other option, or correct the name |
+| The server stops at startup and names `--chip` | `--chip` with a drafter other than DFlash2, more than 11 draft tokens, n-gram drafting, more than one lane, more than one device, or an unknown firmware name | Remove the other option, or correct the name |
 | `tool_calls` entry, empty content | The server runs without `--chip`, or `max_tokens` ended the call before `</tool_call>` | Start it with `--chip`; raise `max_tokens` |
 | `<tool_response>` holds `error` | The result needs more than 62 digits, or the firmware cannot read the expression | Ask for a smaller result, or an operator from the list above |
 | `finish_reason` is `length` and the response is cut | The output limit fell inside the response | Raise `max_tokens`; each digit of a response is one token |
@@ -186,7 +187,7 @@ Do not leave the trace on for a server in service: the file grows with every cal
 
 ## What is not supported
 
-- A drafter beside the tower.
+- A drafter other than DFlash2 beside the tower, n-gram drafting, and more than 11 draft tokens.
 - More than one request lane, or more than one device.
 - Requests in thinking mode, streamed requests, the Responses and Anthropic endpoints, structured
   output, and histories that hold earlier tower calls. None of these has run with `--chip`.
