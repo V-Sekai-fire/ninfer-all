@@ -11,6 +11,9 @@ The release format copies the desync pattern of
 `payload-data-NNN.bin` volumes below the GitHub asset limit. `payload-linux.caidx` indexes the
 payload, and `ninfer-install` installs it online from a tag or offline from the assets beside it.
 
+To serve the artifact that carries a chip tower, and to rebuild it, follow
+[`chip-tower-sop.md`](chip-tower-sop.md).
+
 ## Steps
 
 Every script is nushell and runs inside the pixi environment, from the repository root.
