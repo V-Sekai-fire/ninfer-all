@@ -24,6 +24,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -139,6 +140,7 @@ public:
         }
         diagnostics_ = options.diagnostic_observer;
         chip_trace_path_ = options.chip_trace_path;
+        chip_round_cap_  = !options.chip_test_no_round_cap;
         if (options.suspend.enabled) {
             if (!instance_.suspendable()) {
                 throw std::logic_error("model suspend is enabled but the instance is not suspendable");
@@ -331,7 +333,7 @@ public:
             if (instance_.chip) {
                 const models::qwen3_5::ChipConfig& chip = instance_.chip->config();
                 output.enable_chip(static_cast<TokenId>(chip.tool_call_open),
-                                   static_cast<TokenId>(chip.tool_call_close));
+                                   static_cast<TokenId>(chip.tool_call_close), chip_round_cap_);
                 chip_prompt = models::qwen3_5::PreparedPromptAccess::view(prompt).token_ids;
             }
             request = std::make_shared<Request>(request_id, publication_order, std::move(prompt),
@@ -1997,6 +1999,20 @@ private:
         return out;
     }
 
+#if defined(__GNUC__) || defined(__clang__)
+    __attribute__((format(printf, 2, 3)))
+#endif
+    void chip_trace(const char* format, ...) const {
+        if (chip_trace_path_.empty()) { return; }
+        std::FILE* file = std::fopen(chip_trace_path_.c_str(), "a");
+        if (file == nullptr) { return; }
+        std::va_list args;
+        va_start(args, format);
+        std::vfprintf(file, format, args);
+        va_end(args);
+        std::fclose(file);
+    }
+
     void follow_chip(const std::shared_ptr<Request>& request, std::uint32_t accepted) {
         constexpr std::uint32_t kBurstLimit = 60000;
         if (request->chip_failed || accepted == 0 || accepted > request->generated.size()) {
@@ -2012,13 +2028,47 @@ private:
             }
             const std::span<const TokenId> tokens(
                 request->generated.data() + (request->generated.size() - accepted), accepted);
-            const std::optional<TokenId> owner = tower.advance(tokens);
+            const TokenId open_token  = static_cast<TokenId>(tower.config().tool_call_open);
+            const TokenId close_token = static_cast<TokenId>(tower.config().tool_call_close);
+            if (request->chip_call_open && accepted > 1) {
+                ++chip_open_multi_rounds_;
+                chip_trace("{\"event\": \"open_round\", \"request\": %llu, \"tokens\": %u, "
+                           "\"open_multi_rounds\": %llu}\n",
+                           static_cast<unsigned long long>(request->id), accepted,
+                           static_cast<unsigned long long>(chip_open_multi_rounds_));
+            }
+            std::optional<TokenId> owner;
+            for (std::size_t index = 0; index < tokens.size(); ++index) {
+                owner = tower.advance(tokens.subspan(index, 1));
+                if (tokens[index] == open_token) {
+                    request->chip_call_open = true;
+                } else if (tokens[index] == close_token) {
+                    request->chip_call_open = false;
+                }
+                if (owner && index + 1 != tokens.size()) {
+                    ++chip_skipped_owned_;
+                    publish_diagnostic(diagnostics_, DiagnosticLevel::Warning,
+                                       "chip tower | request %llu | owned position skipped: %zu "
+                                       "token(s) were committed after it in the same round",
+                                       static_cast<unsigned long long>(request->id),
+                                       tokens.size() - index - 1);
+                    chip_trace("{\"event\": \"skipped\", \"request\": %llu, "
+                               "\"skipped_owned\": %llu}\n",
+                               static_cast<unsigned long long>(request->id),
+                               static_cast<unsigned long long>(chip_skipped_owned_));
+                }
+            }
             if (!owner) { return; }
             if (!request->is_decode_ready() || request->capture_pending) {
+                ++chip_skipped_owned_;
                 publish_diagnostic(diagnostics_, DiagnosticLevel::Warning,
                                    "chip tower | request %llu | owned position skipped: the "
                                    "request is not at a decode boundary",
                                    static_cast<unsigned long long>(request->id));
+                chip_trace("{\"event\": \"skipped\", \"request\": %llu, "
+                           "\"skipped_owned\": %llu}\n",
+                           static_cast<unsigned long long>(request->id),
+                           static_cast<unsigned long long>(chip_skipped_owned_));
                 return;
             }
             const Clock::time_point burst_started = Clock::now();
@@ -2039,21 +2089,16 @@ private:
                 static_cast<unsigned long long>(request->id), burst.chip_tokens,
                 burst.echo.size(), kept, burst_ms,
                 burst.truncated ? " | stopped at the chip token limit" : "");
-            if (!chip_trace_path_.empty()) {
-                if (std::FILE* file = std::fopen(chip_trace_path_.c_str(), "a")) {
-                    std::fprintf(
-                        file,
-                        "{\"request\": %llu, \"chip_tokens\": %u, \"kept\": %zu, "
-                        "\"burst_ms\": %.1f, \"call\": [%s], \"stream\": [%s]}\n",
-                        static_cast<unsigned long long>(request->id), burst.chip_tokens, kept,
-                        burst_ms,
-                        chip_id_list(std::span<const TokenId>(request->generated)
-                                         .subspan(call_begin))
-                            .c_str(),
-                        chip_id_list(burst.stream).c_str());
-                    std::fclose(file);
-                }
-            }
+            chip_trace("{\"event\": \"burst\", \"request\": %llu, \"chip_tokens\": %u, "
+                       "\"kept\": %zu, \"burst_ms\": %.1f, \"open_multi_rounds\": %llu, "
+                       "\"skipped_owned\": %llu, \"call\": [%s], \"stream\": [%s]}\n",
+                       static_cast<unsigned long long>(request->id), burst.chip_tokens, kept,
+                       burst_ms, static_cast<unsigned long long>(chip_open_multi_rounds_),
+                       static_cast<unsigned long long>(chip_skipped_owned_),
+                       chip_id_list(
+                           std::span<const TokenId>(request->generated).subspan(call_begin))
+                           .c_str(),
+                       chip_id_list(burst.stream).c_str());
             if (burst.truncated || kept != burst.echo.size()) { request->chip_failed = true; }
             request->chip_echo_cut = kept != burst.echo.size();
             if (kept == 0) { return; }
@@ -3422,6 +3467,9 @@ private:
         RequestError(RequestErrorKind::Overloaded, "engine out of memory during execution"));
     DiagnosticObserver diagnostics_;
     std::string chip_trace_path_;
+    bool chip_round_cap_                 = true;
+    std::uint64_t chip_open_multi_rounds_ = 0;
+    std::uint64_t chip_skipped_owned_     = 0;
     // Model residency. The snapshots exist only when suspend is enabled and are touched under the
     // execution mutex; the flags are also read by submit and is_available without it.
     const ModelSuspendOptions suspend_options_;

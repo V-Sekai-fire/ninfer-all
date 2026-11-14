@@ -20,6 +20,7 @@ namespace ninfer {
 using TokenId = std::int32_t;
 
 inline constexpr std::uint32_t kMaximumConcurrency               = 8;
+inline constexpr std::uint32_t kChipMaximumDraftTokens           = 11;
 inline constexpr std::size_t kMaximumContextCacheSessionKeyBytes = 256;
 inline constexpr std::size_t kMaximumExplicitPromptCacheMarkers  = 4;
 // ContextCacheHints::allow_engine_prefix_grid proposes at most this many shared candidates, at
@@ -641,6 +642,7 @@ struct EngineOptions {
     bool gdn_state_fp16                    = false;
     std::string chip_firmware;
     std::string chip_trace_path;
+    bool chip_test_no_round_cap = false;
     // Device-memory trades that store a W8 vocabulary matrix at a narrower group-64 width while
     // the weights load (the artifact is unchanged). lm_head_q6 saves ~26% of the output head for
     // +0.01% perplexity; embedding_q4 halves the token embedding with no measurable perplexity

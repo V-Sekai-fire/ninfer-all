@@ -206,6 +206,7 @@ struct RequestRecord {
     bool chip_started = false;
     bool chip_failed  = false;
     bool chip_echo_cut = false;
+    bool chip_call_open = false;
 
     std::mutex mutex;
     std::condition_variable cv;

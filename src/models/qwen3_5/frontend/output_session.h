@@ -77,7 +77,7 @@ public:
     [[nodiscard]] runtime::OutputDecision preview_control(std::span<const TokenId> tokens,
                                                           std::uint32_t total_budget_remaining);
     [[nodiscard]] runtime::OutputDecision preview_terminal(FinishReason reason);
-    void enable_chip(TokenId tool_call_open, TokenId tool_call_close);
+    void enable_chip(TokenId tool_call_open, TokenId tool_call_close, bool round_cap = true);
     [[nodiscard]] bool chip_tool_call_open() const noexcept;
     void set_chip_echo(std::vector<TokenId> tokens);
     [[nodiscard]] PublishedOutput commit_preview();

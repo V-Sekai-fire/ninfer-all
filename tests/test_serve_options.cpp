@@ -71,9 +71,27 @@ int main() {
                              "--chip-trace", "bursts.jsonl"})
                               .chip_trace_path == "bursts.jsonl",
                       "server did not preserve the chip trace file");
+    {
+        const ServeOptions drafted = parse({"ninfer-serve", "model.ninfer", "--chip", "calc-bridge",
+                                            "--spec", "dflash2", "--draft-tokens", "5"});
+        failures += check(drafted.speculative.backend == ninfer::SpeculativeBackend::DFlash2 &&
+                              drafted.speculative.draft_tokens == 5 &&
+                              drafted.speculative.ngram_draft_tokens == 0 &&
+                              !drafted.chip_test_no_round_cap,
+                          "server did not accept the chip tower with DFlash2");
+        failures += check(parse({"ninfer-serve", "model.ninfer", "--chip", "calc-bridge",
+                                 "--chip-test-no-round-cap"})
+                                  .chip_test_no_round_cap,
+                          "server did not preserve the chip test switch");
+    }
     for (const std::vector<std::string>& args : std::vector<std::vector<std::string>>{
              {"--chip-trace", "bursts.jsonl"},
-             {"--chip", "calc-bridge", "--spec", "dflash2", "--draft-tokens", "5"}}) {
+             {"--chip-test-no-round-cap"},
+             {"--chip", "calc-bridge", "--spec", "mtp", "--draft-tokens", "3"},
+             {"--chip", "calc-bridge", "--spec", "dflash", "--draft-tokens", "5"},
+             {"--chip", "calc-bridge", "--spec", "dflash2", "--draft-tokens", "12"},
+             {"--chip", "calc-bridge", "--spec", "dflash2", "--draft-tokens", "5",
+              "--ngram-draft-tokens", "15"}}) {
         std::vector<std::string> full{"ninfer-serve", "model.ninfer"};
         full.insert(full.end(), args.begin(), args.end());
         bool rejected = false;

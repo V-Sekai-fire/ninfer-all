@@ -157,6 +157,8 @@ std::string serve_usage_text(const char* argv0) {
            "                                model with firmware NAME (for example\n"
            "                                calc-bridge); needs --max-concurrency 1\n"
            "                                and no --spec; adds the calc tool to requests\n"
+           "  --chip-test-no-round-cap      test only: with --chip, let a round commit more\n"
+           "                                than one token while a tool call is open\n"
            "  --chip-trace FILE             with --chip, append one JSON line per chip burst\n"
            "                                to FILE (the call and the burst's token ids)\n"
            "  --rope-yarn                   past the model's native window, apply Qwen's\n"
@@ -1285,6 +1287,10 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             }
             continue;
         }
+        if (arg == "--chip-test-no-round-cap") {
+            options.chip_test_no_round_cap = true;
+            continue;
+        }
         if (arg == "--chip-trace") {
             options.chip_trace_path = require_value("--chip-trace");
             if (options.chip_trace_path.empty()) {
@@ -1666,10 +1672,8 @@ ServeOptions parse_serve_options(int argc, char** argv) {
     if (!options.chip_firmware.empty() && options.max_concurrency != 1) {
         throw std::invalid_argument("--chip requires --max-concurrency 1");
     }
-    if (!options.chip_firmware.empty() &&
-        (options.speculative.backend != SpeculativeBackend::None ||
-         options.speculative.ngram_draft_tokens != 0)) {
-        throw std::invalid_argument("--chip cannot be combined with --spec or n-gram drafting");
+    if (options.chip_test_no_round_cap && options.chip_firmware.empty()) {
+        throw std::invalid_argument("--chip-test-no-round-cap requires --chip");
     }
     if (!options.chip_trace_path.empty() && options.chip_firmware.empty()) {
         throw std::invalid_argument("--chip-trace requires --chip");
@@ -1691,6 +1695,18 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             "--unconstrained-response-format conflicts with --structured-output");
     }
     product::apply_default_ngram_draft_tokens(options.speculative, ngram_width_explicit);
+    if (!options.chip_firmware.empty() && !ngram_width_explicit) {
+        options.speculative.ngram_draft_tokens = 0;
+    }
+    if (!options.chip_firmware.empty() &&
+        ((options.speculative.backend != SpeculativeBackend::None &&
+          options.speculative.backend != SpeculativeBackend::DFlash2) ||
+         options.speculative.ngram_draft_tokens != 0 ||
+         options.speculative.draft_tokens > kChipMaximumDraftTokens)) {
+        throw std::invalid_argument(
+            "--chip runs without a drafter or with --spec dflash2 and --draft-tokens of at most "
+            "11; it cannot be combined with --spec mtp, --spec dflash or n-gram drafting");
+    }
     product::validate_speculative_cli_options(options.speculative);
     if (options.vision_residency != VisionResidency::Resident && !options.enable_vision) {
         throw std::invalid_argument("--vision-residency overlay or cpu requires --vision");
